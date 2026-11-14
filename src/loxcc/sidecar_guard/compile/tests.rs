@@ -749,6 +749,38 @@ fn catalogue_neutral_edits_of_visualized_controls_need_no_sidecar_changes() {
 }
 
 #[test]
+fn lighting_wiring_preserves_native_names_and_catalogue_bytes() {
+    let project = PROJECT.replace("Title=\"Lights\"", "Title=\"Lights\" Desc=\"Room lighting\"");
+    let catalogue = CATALOGUE
+        .replace("\"name\":\"Lights\"", "\"name\":\"Room lighting\"")
+        .replace("2026-01-01 00:00:00", "2026-01-02 00:00:00");
+    let permissions = source_permissions();
+    let source = archive(&project, &catalogue, &permissions);
+    let wired = project.replace(
+        "<Co K=\"Mv\" U=\"9a000000-0000-0002-ffff000000000000\"/>",
+        "<Co K=\"Mv\" U=\"9a000000-0000-0002-ffff000000000000\"><In Input=\"9b000000-0000-0002-ffff000000000000\"/></Co>",
+    );
+    let repacked = repack_zip(&source, wired.as_bytes()).unwrap();
+    validate_archive_deployment(&source, &repacked, wired.as_bytes()).unwrap();
+    assert_eq!(extract_and_decompress(&repacked).unwrap(), wired.as_bytes());
+    assert_eq!(member(&repacked, "LoxAPP3.json"), catalogue.as_bytes());
+    assert_eq!(member(&repacked, "permissions.bin"), permissions);
+
+    // An explicit title change still updates the name, including alongside wiring.
+    let renamed = wired
+        .replace(DATE, NEW_DATE)
+        .replace("Title=\"Lights\"", "Title=\"Ceiling lights\"");
+    let repacked = repack_zip(&source, renamed.as_bytes()).unwrap();
+    validate_archive_deployment(&source, &repacked, renamed.as_bytes()).unwrap();
+    let mut expected: Value = serde_json::from_str(&catalogue).unwrap();
+    expected["controls"]["U:9a000000-0000-0001-ffff000000000000"]["name"] =
+        json!("Ceiling lights");
+    expected["lastModified"] = json!("2026-02-01 00:00:00");
+    assert_eq!(app(&repacked), expected);
+    assert_eq!(member(&repacked, "permissions.bin"), permissions);
+}
+
+#[test]
 fn links_and_renames_update_existing_entries() {
     let xml = PROJECT
         .replace(DATE, NEW_DATE)

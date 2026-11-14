@@ -459,7 +459,7 @@ pub(super) fn compile(
     render_energy(&mut data, &project, &edits)?;
     render_status(&mut data, &project, &edits)?;
     render_intercoms(&mut data, &project, &edits)?;
-    render_renames(&mut data, &project, &edits)?;
+    render_renames(&mut data, &project, changes)?;
     for uuid in &relinked {
         let block = project.objects[uuid];
         set_links(&mut data, block)?;
@@ -555,9 +555,16 @@ fn rename(data: &mut Value, block: &Element, kind: Kind) -> Result<()> {
 }
 
 /// Rename controls whose entries the type-specific renderers do not own.
-fn render_renames(data: &mut Value, project: &Project, edits: &BTreeMap<&str, Edit>) -> Result<()> {
-    for kind in [Kind::LightController, Kind::Catalogued] {
-        for (block, _) in project.edited(kind, edits) {
+fn render_renames(data: &mut Value, project: &Project, changes: &[Change<'_>]) -> Result<()> {
+    for change in changes {
+        let (Some((_, old)), Some((_, block))) = (change.before, change.after) else {
+            continue;
+        };
+        // Native display names can differ from technical titles. Wiring is not a rename.
+        if attribute(old, "Title") == attribute(block, "Title") {
+            continue;
+        }
+        if let Some(kind @ (Kind::LightController | Kind::Catalogued)) = project.kind(block) {
             rename(data, block, kind)?;
         }
     }
