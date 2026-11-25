@@ -1,12 +1,43 @@
 {
   "schema_version": 1,
   "xml_type": "LightController2",
-  "scope": "initial-read-only-storage-inspection",
+  "scope": "stored-inspection-and-source-backed-mood-edits",
   "capabilities": {
     "inspect_stored_mood_outputs": true,
+    "inspect_stored_mood_editor_kinds": true,
     "inspect_output_connector_references": true,
     "inspect_unknown_nested_attributes": true,
-    "new_nested_edits": false,
+    "inspect_native_mood_reconciliation_risks": true,
+    "author_native_style_mood_output_defaults": true,
+    "author_native_style_mood_ids": true,
+    "author_numeric_mood_levels": true,
+    "edit_existing_ordinary_tag6_rgb_capability7": true,
+    "preview_existing_numeric_mood_level": true,
+    "preview_existing_raw_packed_mood_color": true,
+    "preview_existing_mood_creation": true,
+    "edit_existing_mood_cid_transaction": true,
+    "preview_existing_mood_cid_transaction": true,
+    "edit_ordinary_mood_sid_transaction": true,
+    "preview_ordinary_mood_sid_transaction": true,
+    "rename_existing_mood_ascii_subset": true,
+    "preview_existing_mood_ascii_rename": true,
+    "set_role_independent_mood_mix": true,
+    "preview_role_independent_mood_mix": true,
+    "set_omitted_mood_mix_default": true,
+    "set_mood_mix_with_omitted_cid": true,
+    "accept_native_mood_boolean_case_variants": true,
+    "set_mood_cycling_exclusion": true,
+    "preview_mood_cycling_exclusion": true,
+    "edit_mood_display_name_ascii_subset": true,
+    "normalize_mood_display_name_ascii_opt_in": true,
+    "preview_existing_mood_display_name": true,
+    "inspect_numeric_mood_identity_duplicates": true,
+    "inspect_selected_stored_mood_options": true,
+    "inspect_selected_stored_mood_references": true,
+    "inspect_numeric_mood_icon_reference": true,
+    "set_role_dependent_mood_mix": false,
+    "repair_stored_mood_count": true,
+    "new_nested_edits": true,
     "gui_roundtrip_verified": false,
     "runtime_parity": false,
     "full_family_contract": false
@@ -19,6 +50,346 @@
     "decompile_index_sha256": "129c5d4e8683dd3c9c4a44622681f8d8bb76fe58c72d0b834a2c7bb76415cf40",
     "canonical_written_bodies": 53088,
     "raw_vendor_artifacts": "private-and-ignored"
+  },
+  "bounded_native_observations": [
+    {
+      "case_id": "lox-t5t3.9-sdk9f707-v1-persistence-phase",
+      "artifact": "tests/ux/light-controller2/color-widget-persistence-20261112.json",
+      "sha256": "99f869ea110af675b3c52d5c76edcfee33d445f7aaedccb8d611d199d349dc81",
+      "result": "Following the separately recorded Color Picker observation, VM122 saved/canceled inspection, exited to zero, reopened in a fresh process, selected prescribed SID1 and read back Q1 color dropdown, then exited normally. Saved/postexit/final bytes identical; actual native saved CapAI0=7/Q1 tag6 is classified color by the immutable CLI.",
+      "all_deltas": "98 changed nodes/100 attribute deltas retained, including Title/WF and HCL T/TMIN/FROM/TO. Selected Qn/SID/CID/CapAI0 unchanged in saved XML; not a universal graph-state guarantee. No whole-file equality or incidental normalization.",
+      "qualification": "No full guarded qualification: earlier navigation lacks retained explicit phase deadline and two later post-capacity-close read-only calls are disclosed. Local audit found all23 retained persistence-phase GUI intents and local post-acknowledgement reply-file times within finite windows, with target/phase limits satisfied. Separate guest delivery/pending timestamps are not exposed; no earlier missing evidence is repaired.",
+      "capability_policy": "Observed lifecycle/selected-widget agreement only; no accepted color edit, qualified case/old-run credit or aggregate GUI/runtime/family/whole-file promotion. Earlier incomplete-phase artifact remains immutable."
+    },
+    {
+      "case_id": "lox-t5t3.9-sdk9f707-v1",
+      "artifact": "tests/ux/light-controller2/color-widget-observation-20261111.json",
+      "sha256": "dfa76d9a67feabc5d4e788674bce0edec7066c4f275e412f7f9ff8fec332d10c",
+      "result": "Independently admitted repaired-SDK VM122 selected prescribed SID1 and actually opened its Q1 Color Picker, consistent with immutable CLI stored tag6/CapAI0=7 input classification. Initial special ID99 widget was not substituted for the requested mood.",
+      "persistence": "Bounded widget observation only: picker Cancel acknowledged, no color edit accepted, no native saved output or normal-exit/fresh-reopen verified in this sealed phase. Current host/worker admission reclosed before further effects.",
+      "semantic_limit": "No claim that native graph preparation preserved initial type/capability or that the stored classifier predicts all loaded/physical state. In-memory incidental deltas are not asserted absent or ignored.",
+      "capability_policy": "No case completion, old-run credit, aggregate gui_roundtrip_verified/runtime_parity/full_family/whole-file promotion. Later phase evidence remains separate."
+    },
+    {
+      "case_id": "lighting-accepted-numeric-37-20261111",
+      "artifact": "tests/ux/light-controller2/numeric-edit-save-reopen-20261111.json",
+      "sha256": "05ba6aec088d8860cc952e6afdd03c8ed85c3c3400c982f724ab14e31b0dd4cf",
+      "result": "Accepted native Q2 numeric37 saved1610612773, preserving tag6, and a fresh native process reopened its numeric control as37. The CLI numeric operation on the exact same input produces the same selected value.",
+      "incidental_deltas": "The native accepted-edit workflow also changed Q1 to a numeric100 payload and HCL T/TMIN/FROM/TO, plus Document stamps. All eight actual attribute deltas are retained; all remaining raw bytes are exact. The CLI intentionally leaves Q1/HCL untouched.",
+      "capability_policy": "Selected scalar-encoding observation only. Aggregate gui_roundtrip_verified, runtime_parity and full_family_contract remain false; no whole accepted-dialog equality or physical channel mapping."
+    },
+    {
+      "case_id": "lighting-create-edit-saveas-reopen-20261111-lox-ue95",
+      "artifact": "tests/ux/light-controller2/create-edit-saveas-reopen-20261111.json",
+      "sha256": "c4d1d119d0ac0385159bdf349f486b34764b49b0d3153589296171fc0b58c49a",
+      "result": "One CLI create/Q2-edit/save, native Save As to a new file, normal exit and fresh reopen completed. Native output and post-inspection/normal-exit file bytes equal the complete CLI-saved input. SID1/CID12, scene Outputs18, all Q type nibbles and unrelated bytes survived; the reopened editor recognized the new mood.",
+      "semantic_limit": "The fixture's numeric dimmer controls display both RGB-packed Q1/Q2 values as100. Storage preservation does not establish color/dimmer semantics or accepted dirty-native-edit serialization.",
+      "capability_policy": "Scoped observation only. Aggregate gui_roundtrip_verified, runtime_parity and full_family_contract remain false; historical source-only cases and failed native attempts keep their own unchanged status."
+    }
+  ],
+  "ordinary_rgb_mood_edit": {
+    "command": "lox config lighting set-mood-rgb FILE BLOCK --mood SID_OR_NAME --output-index N --rgb R,G,B [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/ordinary-rgb-source.json",
+    "source_sha256": "1b5dd03196870f07db786e80678c810b0dd76ba55b874761ec086715a57c5b16",
+    "new_semantics": "Connect selected-row SID callback and color-control index/ID, accepted picker COLORREF/mode fields and ordinary-versus-white/sequence state to the known color handler and reused accepted-copy/XML-emitter chain. Existing 13 numeric-source pins, capability classifier, color encoder and serializer evidence are reused, not new recovery.",
+    "supported_branch": "Only existing stored tag6, explicit CapAI<n-1>=7, positive valid ordinary RGB percent payload, no selected SeqConf and Locked/ReadOnly/Sequencing absent or false. Reject all other tags/capabilities, even color-classified cases; do not infer physical RGB hardware or graph-refresh state.",
+    "selection_and_storage": "One direct collection and one exact stored SID-spelling or case-sensitive Name match; explicit Num equals direct count, parsed sibling SIDs, unique selected ordinary SID1..90. Existing signed32 Qn, index1..18 within scene reader width (absent/zero Outputs=12). Identity, shape, width and mode failures precede mutation.",
+    "encoding": "Final RGB bytes0..255 -> lround(byte/2.55) percentages -> R+G*1000+B*1000000, OR old high nibble. No HSV/raw parsing, clamp or silent mode conversion. Reject all-zero rounded payload because tag6 zero reopens in the dynamic-white default. Example64,128,255 ->25,50,100 ->1710662761.",
+    "preservation": "Only selected Qn attribute changes; retain IDs/order, widths/Num/flags, LSConfig, HCL, capabilities, all other Qn and unknown data. Preserve equivalent spelling/no-op bytes, BOM/EOL and ordinary DOM writer/save-stamp behavior. Existing raw set-mood-color parser/domain/writer unchanged.",
+    "formats": "JSON includes selected raw identity, output/index, before/after, RGB bytes, rounded percent, type_tag, stored capability and changed; table/CSV, quiet/no-header, room/save-as. No new dry-run support: existing fail-closed policy remains.",
+    "native_validation": "Fixture recommendation in source artifact; VM122 case9 mask7/tag6 widget is a lead only. No accepted RGB GUI run or aggregate native/runtime/family promotion. Native validation proceeds independently.",
+    "tests": "src/config_edit/lighting_tests.rs: lighting_rgb_*; tests/lighting_rgb_cli.rs; existing raw contract regressions remain unmodified.",
+    "limits": "Final COLORREF-to-selected-Qn source branch, not arbitrary native text/HSV/brightness gesture equivalence, graph-dependent pre-modal refresh, complete dialog editability, dynamic-white/sequence editing, full color-tag support or whole-dialog normalization. WM_COMMAND sender/control-ID/index correlation is source-visible; the static MFC message-map entry is not present in the canonical C bodies and is not guessed."
+  },
+  "numeric_mood_level_edit": {
+    "command": "lox config lighting set-mood-level FILE BLOCK --mood SID_OR_NAME --output-index N --level 0..100 [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/numeric-mood-level-source.json",
+    "source_sha256": "6626d2876679e4615ccf0242feb055f840ca4dd76828eea176b07e5fe4b89c1b",
+    "per_mood_kind": "Selected Qn high nibble selects the renderer. Tags1/2/3/7 are numeric. Tag6 uses CapAI<n-1>: bit0x40 selects color branch9; otherwise all low three bits set selects color branch6; otherwise numeric branch7. Missing CapAI has recovered reader default0, distinct from stored omission.",
+    "separate_global_mode": "Do not replace selected-mood dispatch with0x1405c1870: that helper starts from the first scene and additionally prioritizes capability0x20->8. These stored classifications are not a physical/runtime channel-role model.",
+    "scalar_encoding": "Native0x1400e6460 stores (oldQ & 0xf0000000) | clamp(level,0,100). CLI accepts only integers0..100 and never clamps. Existing packed-color storage editing is separate and unchanged.",
+    "validation": "Require exact LightController2, one direct collection and one unambiguous direct mood, supported existing signed-32-bit Qn within its stored reader width, output index1..18 for this path, and a supported numeric branch. Needed explicit CapAI must be a nonnegative16-bit decimal; no truncation/defaulting of unsupported stored values. All validation precedes mutation/file writes.",
+    "preservation": "Change only requested Qn; retain its tag, every other output, IDs/order, widths/counts, HCL, capabilities, sequences, references and unknown data. Preserve equivalent spelling/no-op bytes. Existing writer formatting and Document stamps retain normal behavior.",
+    "qualified_native_observation": {
+      "case_id": "lox-t5t3.10",
+      "artifact": "tests/ux/light-controller2/numeric-level37-qualified-20261112.json",
+      "sha256": "1a8b2262ad245f5157d24165842380e39adaa0821f074f3e0db3335393d11805",
+      "result": "Exactly original VM122 tag6 numeric-capability Q2, controller2f7e37d4-18cb-0ba8-ffff741afa8d2a84/mood59fc4d58-9165-35fc-ffff741afa8d2a84/SID1/CID12: actual native37+blur+OK, official CtrlS, acknowledged normal exit with retained-handle exit0, fresh-process actual37 readback, inspection Cancel without edit/resave and final normal exit0. Raw1610622736 became1610612773=1610612736+37; saved/reopened/final141186 bytes identical. All17 qualifying input gates independently verified.",
+      "collateral_boundary": "Selected-operation acceptance/persistence, NOT selected-only native mutation. Full raw collateral retained: original-to-native99 start tags/104 attributes, CLI-expected-to-native103 attributes; Q1 1640612766->1610612836, HCL T2->4/TMIN2000->2700/FROM0->24115/TO0->67570,94Title/2WF and Date/DateS changes. All1318 ordered node IDs/child order stable; noNumchange. No ignore lists, normalization or whole-file equality.",
+      "capability_policy": "No aggregate GUI/family/SPS/runtime, physical actuation, general-channel, numeric0, color-edit, historical normalization or other-case/Notebook credit. Physical delivery timing uninstrumented; no unconditional8real-host-seconds claim. Failed old source/phases/capacity overruns remain uncredited; historical artifacts and frozen CLI unchanged."
+    },
+    "tests": "src/config_edit/lighting_tests.rs and tests/lighting_source_capability.rs: lighting_numeric_level_*",
+    "limits": "Not graph-dependent pre-modal refresh prediction, complete dialog editability/permissions, Num-limited import, special-scene normalization, color/dynamic-white/sequence edits, physical channel mapping or runtime/family parity."
+  },
+  "numeric_mood_level_preview": {
+    "command": "lox config lighting set-mood-level FILE BLOCK --mood SID_OR_NAME --output-index N --level 0..100 --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/numeric-mood-level-preview-source.json",
+    "source_sha256": "f3b2837a48fbfc218981f425b2b7e9e0aad948c1bee31049a668af93fc1ac47b",
+    "shared_plan": "Immutable preview_lighting_mood_level and existing set_lighting_mood_level share one private LightingMoodLevelPlan wrapping the unchanged LightingMoodLevelEdit. No cloned XML, writer-then-discard, diff simulation or generic framework.",
+    "ordered_admission": "Existing CLI flag/room guards, level0..100, output1..18, block resolution, exact LightController2, one direct collection and one unambiguous exact stored SID spelling or case-sensitive Name; then existing scene reader width, selected stored Qn, signed32 parsing, within-width check and unchanged numeric_mood_capability guards. Needed tag6 capability retains existing u16 parser/effective0 omission; tags1/2/3/7 ignore unneeded capability. No new channel/mode/range/identity/Num/boolean/role/permission admission, clamping, repair, synthesis or defaults. Same errors and order.",
+    "encoding_and_noop": "Keep high nibble and replace low payload only. Preserve existing signed/plus/zero-padded decimal rules and exact raw spelling when encoded integer equals stored integer. No RGB reinterpretation; set-mood-color stays separate unchanged raw packed editing, with its own preview below. Inspection/classifiers are unchanged.",
+    "formats": "JSON retains every writer field and adds selected_mood raw UUID/SID/CID, output_index, editor_kind numeric, before_effective/after_effective, dry_run=true and optional trace_id. Effective means low28 stored scalar payload only, not displayed/clamped level, RGB decoding or physical brightness; even existing payloads above100 are shown unchanged. Dedicated table/CSV retain selected raw identity/Qn, raw/effective before-after and actual tag/capability classification even on no-op. CSV carries presence/consulted fields. Quiet hides only table summary, no-header only headers; writer output/CSV order are unchanged.",
+    "preservation": "No editor mutation/save on success, no-op or failure with input/existing/new missing-directory save-as. No source/destination/default/stamp/directory/cache/telemetry writes, writability checks or serialization predictions. Existing writer API/report/save/stamp/no-op behavior and selected-Qn-only mutation remain unchanged; all unrelated Qn, identities/flags/names, widths/counts/order, capabilities, sequences, LSConfig, HCL, references and unknown data retain existing admission/preservation. Preview preserves BOM/CRLF and exact source/destination bytes.",
+    "tests": "src/config_edit/lighting_tests.rs: immutable boundary/no-op/writer parity plus ordered error parity; tests/lighting_source_capability.rs: lighting_numeric_level_cli_dry_run_*; tests/dry_run.rs: telemetry-enabled snapshot; src/dry_run.rs: exact allowlist",
+    "limits": "Source-only read-only preview of one already supported stored selected-Qn operation. No new native case/approval, GUI Cancel/dialog refresh, graph-dependent pre-modal changes, full-dialog/final-save/write-success prediction, live role/permission/physical channel claim, SPS/runtime/family or whole-file parity. Original independent native cases, frozen CLI and historical evidence are untouched."
+  },
+  "raw_packed_mood_color_preview": {
+    "command": "lox config set-mood-color FILE SELECTOR --mood SID_OR_NAME --color SPEC --output-index N --dry-run [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/raw-mood-color-preview-source.json",
+    "source_sha256": "b56c70c749d08399d73dcb101919de6b4519e0feed919d4f8084e2ffc755bbd4",
+    "shared_plan": "Immutable preview_mood_color and unchanged set_mood_color API share one private LightingMoodColorPlan. No cloned DOM, writer-then-discard, serialization prediction or generic mutation framework.",
+    "ordered_admission": "Existing read/XML load, unchanged parse_color_to_mood helper, controller resolution, exact LightController2, nonzero output, first recursive exact SID-or-Name match. Missing SID/Name still default to empty for matching; duplicate mood matches still choose the first. No new direct-container/identity/tag/capability/width/count/boolean validation, range restriction, repair or silently corrected data. Missing nonzero Qn and indices beyond18 remain accepted.",
+    "encoding_and_noop": "Existing HSV/RGB/actor-composite/packed-integer parser and rounding/range decisions are unchanged. Direct editor values remain raw i64, not restricted to i32/u32. Writer always inserts value.to_string() and follows its original report/save/stamp path. Preview changed compares raw strings, so plus/zero-padded equivalent values normalize on normal execution; exact raw matches report false without changing normal execution semantics.",
+    "formats": "JSON: scope raw_packed_edit, actual stored controller_uuid/controller_title, requested mood, selected_mood raw UUID/SID/CID, selected_mood_name, controller-relative selected_mood_path (zero-based XML child-node indices including non-elements), output/index, optional raw before, decimal after, parsed value, changed, dry_run and optional trace_id. No decoded/effective/native color, editor-kind or physical channel fields. Table/CSV retain identities/path/raw storage; CSV carries presence fields and quoted strings. Quiet hides only table summary, no-header only headers. Normal writer output is unchanged.",
+    "preservation": "No editor mutation/save on success, exact no-op, raw spelling rewrite, sparse insertion or failure with input/existing/new missing-parent save-as. No source/destination/default/stamp/directory/cache/telemetry writes or destination-writability/write-success prediction. Existing raw mutation/report/save/stamp/overwrite semantics and every unrelated stored value remain unchanged. Only SetMoodColor is newly admitted; unrelated unplanned operations remain fail-closed.",
+    "tests": "src/config_edit/lighting_tests.rs: lighting_raw_color_preview_* and existing lighting_mood_edit_*; tests/lighting_source_capability.rs: lighting_raw_color_cli_dry_run_*; tests/dry_run.rs telemetry-enabled full filesystem/network preservation; src/dry_run.rs exact allowlist",
+    "limits": "Source-only preview of an existing RAW packed Qn edit, never a mode-aware/native color-picker or channel-appropriate claim. No new native observation/approval, sequence/dialog/pre-modal refresh, final-save/write-success, live role/permission/physical channel, SPS/runtime/family or whole-file parity. Original native cases, frozen CLI and prior artifact bytes are untouched."
+  },
+  "existing_mood_creation_preview": {
+    "command": "lox config add-mood FILE SELECTOR --name NAME --color SPEC [--sid SID] [--cid CID] --dry-run [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-creation-preview-source.json",
+    "source_sha256": "5ac1fa186c8e07665947fb247ea6ce521e3c715d9c30ceb75d536a84abb43812",
+    "shared_plan": "Immutable preview_mood_creation and unchanged add_mood API share one private typed LightingMoodCreationPlan containing an ordered attribute vector, typed SID/CID, collection path and count. The public proposed_mood map projects that vector; normal application uses the same vector/identity/count and original attribute insertion order. No cloned DOM, writer-then-discard, generic framework or public UUID override/reapply API.",
+    "ordered_admission": "Existing file read/XML load, unchanged raw parse_color_to_mood, list_moods resolution/type and recursive exact duplicate-name check, repeated controller resolution, exactly-one-direct-collection check, existing automatic/legacy ID allocation and explicit duplicate-SID check, then native_mood_output_defaults and UUID generation. Same errors/order and supported missing/malformed/duplicate/role/Unicode domains; no new guards, normalization, classification or capabilities.",
+    "existing_creation": "Retain recovered native-style auto IDs and legacy explicit partners from recovered_mood_identity_allocation, including atomic exhaustion/overflow and accepted duplicate explicit CID. Retain native_style_mood_initialization: proposed Name/UUID/Outputs18/SID/CID/Q1..Q18 only, selected raw Q1, first-direct-scene reader-bound type defaults, no added options, untouched existing records/unknown storage and actual direct-record recount. Missing/multiple/nested-only containers remain errors; container_created is false.",
+    "formats": "JSON: scope stored_mood_creation, actual stored controller_uuid/controller_title, controller-relative collection_path XML child-node indices, container_created, optional raw before_num, decimal after_num, proposed_mood map containing every actual new LightsceneC attribute/identity/output, dry_run and optional trace_id. No decoded/effective/UI/physical-channel claims. Dedicated table/CSV retain same fields, presence/escaping and every proposed attribute. Quiet hides only table summary, no-header only headers. Normal writer report/API unchanged.",
+    "RNG_limit": "Planning allocates an ephemeral UUID in memory. Separate preview/execution invocations may generate fresh UUIDs; execution does not reuse a preview UUID. A same-private-plan/application unit proof checks exact identity/attributes without demanding equal RNG across requests.",
+    "preservation": "No editor mutation/save/serialization/default/stamp/destination/directory/cache/telemetry writes on preview success or failure, including input/existing/new missing-parent save-as. No destination-writability or final-save prediction. Normal writer tuple/report/UUID generation/overwrite/save/stamp behavior is unchanged; unrelated attributes, identities/order, widths/counts, sequences, LSConfig, HCL, references and unknown data retain existing semantics. Only AddMood newly admitted; unrelated unplanned operations remain fail-closed.",
+    "tests": "src/config_edit/wiring.rs: lighting_creation_preview_* private-plan/application and ordered errors; tests/lighting_native_append.rs: lighting_creation_cli_dry_run_* outputs/destinations/unchanged writer/load-parser order; tests/dry_run.rs telemetry-enabled full filesystem/network preservation; src/dry_run.rs exact allowlist; existing creation/identity/default suites retained.",
+    "limits": "Source-only read-only preview of an already supported creation operation. No new native case/approval, family/whole-file/SPS/runtime credit, GUI Cancel/dialog refresh, graph-dependent preparation, native role/default/import normalization, color-picker semantics or final-save/write-success prediction. Original native cases, frozen CLI and prior artifact bytes remain unchanged."
+  },
+  "existing_mood_cid_edit": {
+    "command": "lox config lighting set-mood-cid FILE BLOCK --mood SID_OR_NAME --cid N [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-cid-edit-source.json",
+    "source_sha256": "117c546935895b222d66df22140c3a9139befca625aa63eee280fbcdc242a647",
+    "caller": "Grid callback0x1400ea790 column1 passes selected record SID and requested CID to0x1400e6200. Follow only this handler's transaction, not subsequent GUI refresh normalization.",
+    "ordered_effects": "Occupied nonzero CID swaps the other record to the selected record's prior CID. Reserved other SID>=776 triggers an early selected-SID allocation with no reference remap. Selected then initial lookup record normalize: CID22->SID777, CID24->SID776, other affected SID>=776->free1..99. Each later SID change invokes ScMv remapping in native order, allowing cascades. CID0 does not swap but can normalize the initial first zero-CID record.",
+    "selection_refs": "LSConfig ScMv SID values are replaced only in the prefix bounded by OpM length and available ScMv length. Needed supported integer tokens are remapped sequentially; unvisited tail, OpM, ScAc and other data are preserved. Missing/empty vectors cause no reference writes.",
+    "guarded_domain": "One direct collection and exact unambiguous direct mood; signed-32-bit Num matches record count; explicit unique positive SIDs and unique nonzero CIDs, with repeated CID0 using first match. Missing CID uses source-backed effective0 without filling unchanged omission. Requested CID is nonnegative signed32. Unsupported identities, needed selection shapes/lists, final SID collisions and allocation exhaustion fail atomically.",
+    "compatibility": "Distinct from existing add-mood explicit overrides. Native first-match ambiguity and zero-SID exhaustion are deliberately rejected; no automatic role repair, import simulation, incidental normalization or raw-color behavior change.",
+    "tests": "src/config_edit/lighting_cid.rs and tests/lighting_cid_source.rs: lighting_cid_*",
+    "native_validation": "Case lox-t5t3.6 queued independently; blocked at the initial Notebook transport admission, not run or credited.",
+    "limits": "Source-backed existing-record transaction and local persistence only; not full grid vocabulary, post-refresh/save, GUI or runtime parity."
+  },
+  "existing_mood_cid_preview": {
+    "command": "lox config lighting set-mood-cid FILE BLOCK --mood SID_OR_NAME --cid N --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-cid-preview-source.json",
+    "source_sha256": "c53c1fd12ac84dcb370f2f1097e336159a810e0fe5d9710646eaf63b54ac44c5",
+    "shared_plan": "Immutable preview_lighting_mood_cid and existing writer set_lighting_mood_cid use the same private typed transaction plan. All existing CID identity/count/selection/collision/exhaustion guards and ordered effects are unchanged. No cloned-XML simulation, diff-based inference, normalization or separate mutation algorithm.",
+    "formats": "JSON adds dry_run=true, selected raw SID/CID before/after and effective current_cid to the existing edit report. requested_cid is proposed effective CID, including no-op. Table/CSV retain selected raw/effective identity, affected identity records, ordered remaps and consulted ScMv; CSV before/after presence columns distinguish absent from empty.",
+    "preservation": "No editor mutation or save path, including no-op/unsupported input and any save-as argument. No source/destination writes, directory/default/stamp creation or telemetry files. Destination writability is not validated. Errors stay errors with the writer's diagnostic codes; unneeded opaque data and unvisited tails keep existing admission rules.",
+    "tests": "src/config_edit/lighting_cid.rs and tests/lighting_cid_source.rs: lighting_cid_*; src/dry_run.rs dispatch scope",
+    "limits": "Read-only source-only CLI plan over the existing stored transaction. No GUI Cancel/dialog refresh, native final-save or file-write-success prediction; no new native case, current graph state, incidental normalization, runtime/family or whole-file parity."
+  },
+  "selected_mood_reference_inspection": {
+    "command": "lox config lighting inspect-mood-references FILE BLOCK --mood SID_OR_NAME [--room ROOM]",
+    "source_artifact": "tests/ux/light-controller2/mood-reference-inspection-source.json",
+    "source_sha256": "ca6f31e4d4127563d5cd6e621fd531dbe9dead84279818fc4aca40982b038056",
+    "selection": "Reuse exact direct metadata selection. Require explicit positive signed32 direct mood SIDs and unique selected numeric SID; ambiguous mood/LSConfig containers, missing/unsupported identity and selected numeric duplicates are errors, never native first-match guesses. CID is not interpreted.",
+    "references": "Share existing CID/SID selection_config/selection_prefix codec. Report actual stored and numeric selected SID, raw OpM/ScMv, supported OpM count, zero-based visited raw/value/matches and supported unvisited raw tail boundary. Needed signed32 decimals allow surrounding ASCII whitespace and plus/zero spelling; opaque unvisited tails are not interpreted.",
+    "unresolved": "Missing LSConfig or missing/empty vectors means no_visited_references with visited[], without parsing unneeded opposite data or inventing counts/boundaries. Unsupported needed lists yield unresolved with visited/count/tail null and diagnostics, not success-shaped empty data. Raw null/empty spelling is preserved.",
+    "count": "Report raw stored_num separately from direct_moods; warn on absent/unsupported/mismatched Num without recounting or claiming imported-row membership.",
+    "formats": "Complete JSON with diagnostics; table/CSV retain status, selected SID, raw vectors, visited matches and supported tail boundary. CSV RAW_PRESENT separates absent/empty. Quiet/no-header do not hide data or stderr diagnostics.",
+    "preservation": "Read-only local XML; no save, normalization, default insertion, stamps or connections. Existing set-mood-sid/cid behavior and historical evidence are unchanged.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs: lighting_metadata_references_*; tests/lighting_metadata_cli.rs: lighting_metadata_cli_references_*; existing CID/SID regressions.",
+    "limits": "Stored reference candidates only; not Num-limited import, current graph state, GUI visibility/permissions/writeability, complete transaction admission, accepted-dialog serialization or runtime/family parity. No native execution for this surface."
+  },
+  "ordinary_mood_sid_edit": {
+    "command": "lox config lighting set-mood-sid FILE BLOCK --mood SID_OR_NAME --sid 1..90 [--swap] [--allow-cid-clear] [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-sid-edit-source.json",
+    "source_sha256": "542ce58df12e229a8b6409b69e955489c794cdf73eda928df1a3ba7d2ad1482f",
+    "higher_sid_extension_artifact": "tests/ux/light-controller2/mood-higher-sid-source.json",
+    "higher_sid_extension_sha256": "ec7a75dc6d3a220b3b04131ff37c035e3bfa7b5d42794fe286003a45c1768273",
+    "caller": "Grid column2 commit0x1400ea790; owner helper0x1405c1920 returns ordinary IDs unchanged. Free requested1..90 is explicitly range-checked; positive CID with free requested>=32 enters a separate CID-clear confirmation.",
+    "validation": "Exact direct-record metadata selection; Num matches direct scene count; all direct SIDs are explicit positive numerically unique signed32 decimals. Selected/requested SIDs1..90. Occupied different SID requires --swap; direct SID99 blocks occupied exchange. Free changed SID32..90 parses needed CID as nonnegative signed32 or absent effective0, and positive CID requires --allow-cid-clear.",
+    "cid_clear": "Flag permits only the recovered free higher-ID clear branch. Lower, occupied and numeric no-op branches preserve CID, including unneeded opaque spelling. Missing/+000 zero remains omitted/original. All needed reference validation precedes SID/CID mutation, preventing a half-cleared transaction.",
+    "ordered_effects": "Free ID: selectedOld->requested remap and SID write. Occupied exchange: requestedOld->99, selectedOld->requested,99->selectedOld, with affected record SID writes in native order. Pre-existing visited ScMv99 also participates in the final remap; this is not simultaneous substitution.",
+    "references": "Reuse existing CID selection_plan and result types. Remap only the available ScMv prefix bounded by OpM length, preserving whitespace and unvisited tails. Missing/empty vectors cause no reference writes; needed opaque/ambiguous shapes fail before mutation.",
+    "preservation": "Write affected existing SIDs, explicitly accepted selected CID0 and needed ScMv only. Keep all other CIDs/omissions/spellings, UUID, Name/SName, flags, Qn, count/width/order, OpM/ScAc, HCL, capabilities, sequences and unknown storage. Numeric no-op preserves all in-place bytes.",
+    "formats": "JSON includes actual swapped/cid_cleared flags, affected identities, ordered remaps and optional ScMv before/after. Reuse existing identity/selection CSV/table conventions.",
+    "tests": "src/config_edit/lighting_sid.rs and tests/lighting_cid_source.rs: lighting_sid_*",
+    "limits": "Ordinary selected-record transaction only. No raw special/display-ID setter, role repair, import simulation, incidental refresh normalization, native accepted-dialog save/reopen or runtime parity."
+  },
+  "ordinary_mood_sid_preview": {
+    "command": "lox config lighting set-mood-sid FILE BLOCK --mood SID_OR_NAME --sid 1..90 [--swap] [--allow-cid-clear] --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-sid-preview-source.json",
+    "source_sha256": "38bb44bb19a4b671e7db741e04b2125d09b2eeb537fc34b18e159b7e078a5927",
+    "shared_plan": "Immutable preview_lighting_mood_sid and both existing writer entry points use one private typed transaction plan with all existing flag, exact selection, identity, role/range, collision, Num and needed-reference guards unchanged. No identity allocation, cloned XML, diff simulation or duplicate algorithm.",
+    "confirmation": "Preview still requires --swap for occupied exchange and --allow-cid-clear for changed free SID32..90 with positive CID. Missing flags retain the existing errors. Lower, occupied and numeric no-op branches preserve CID, including unneeded opaque data; omission/equivalent zero spelling is not filled or normalized.",
+    "formats": "JSON adds dry_run=true, selected raw before/after SID/CID and effective current_sid to the unchanged edit report; requested_sid is proposed effective SID. swapped/cid_cleared remain actual effects. Shared CID/SID table/CSV retain selected raw/effective identity on no-op, affected identities, exact ordered remaps and consulted ScMv, with CSV presence columns for absent versus empty.",
+    "preservation": "No editor mutation or save path even with save-as input/existing/new destination. No XML/default/stamp/directory/cache/telemetry writes. Destination writability and writer serialization are not simulated. Needed unsupported/ambiguous data remains an error; unneeded opaque lists and unvisited tails preserve the existing writer rules. Existing writer API/results/save/stamp behavior and all CID semantics are unchanged.",
+    "tests": "src/config_edit/lighting_sid.rs and tests/lighting_cid_source.rs: lighting_sid_*; tests/dry_run.rs side-effect snapshots; src/dry_run.rs fail-closed dispatch",
+    "limits": "Read-only source-only plan of the already supported stored ordinary transaction. No new native case, GUI Cancel/dialog refresh, native final-save/file-write-success prediction, special-ID setter, current graph state, incidental normalization, SPS/runtime/family or whole-file promotion."
+  },
+  "existing_mood_rename": {
+    "command": "lox config lighting rename-mood FILE BLOCK --mood SID_OR_NAME --name NAME [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-name-source.json",
+    "source_sha256": "91b169f9a82e5e00482d0a323d4a4febce0eb5e4e568d55631a583acf8b58365",
+    "native_selected_field": "Grid column0 commit0x1400ea790 writes only selected record+0x18, bound to Name. Actual row-data pointer and setter/getter vtable edges are verified.",
+    "validation": "Exactly LightController2, one direct collection and one unambiguous direct mood matching exact stored SID spelling or case-sensitive Name. Nested decoys and numeric Name/SID collisions do not select a record silently.",
+    "new_name": "Nonempty ASCII letters/digits and ordinary internal spaces, with a letter/digit at each end. Reject empty, edge-space, punctuation/control and Unicode inputs rather than approximate native normalization or character conversion.",
+    "compatibility": "Duplicate new names are allowed, matching the native row-bound setter. A later ambiguous Name selector must use an exact unambiguous SID. Missing Name can be populated without generating IDs. Native empty normalized input is ignored; the CLI explicitly rejects empty input.",
+    "preservation": "Only selected Name changes. Keep SName, identities/spellings, Qn, flags, counts/widths/order, LSConfig, HCL, capabilities, sequences and unknown data. No-op in-place preserves bytes; normal existing writer formatting/stamps remain separate.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*",
+    "limits": "Selected model-field transaction only, not full Unicode normalization, GUI permissions, graph refresh, accepted-dialog copyback/save normalization or runtime parity. Native validation remains separately admission-blocked."
+  },
+  "existing_mood_rename_preview": {
+    "command": "lox config lighting rename-mood FILE BLOCK --mood SID_OR_NAME --name NAME --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-name-preview-source.json",
+    "source_sha256": "9424db9cba214f01d0451b5018cfa8bf4a35b7a1f13b87c87f12d48ca28d660a",
+    "shared_plan": "Immutable preview_lighting_mood_rename and existing rename_lighting_mood use one private LightingMoodRenamePlan with unchanged ordered validation, direct selection and LightingMoodRenameEdit report. No XML cloning, writer-then-discard, diff simulation or generic framework.",
+    "ordered_admission": "First require the existing nonempty ASCII new-name subset with alphanumeric edges and internal ordinary spaces. Then use existing block resolution, require exactly LightController2, one direct LightscenesC and one direct mood matching exact stored SID spelling or case-sensitive Name. Numeric Name/SID collisions and multiple matches remain ambiguous. No numeric parsing, positive SID, numeric sibling uniqueness, flag/role/visibility/graph/permission guard, default repair or deduplication is imported from other operations. Unsupported new names remain errors even on identical stored-name no-op.",
+    "formats": "JSON adds dry_run=true and optional trace_id to the unchanged writer report: actual selected raw UUID/SID/CID, before Name (null when absent), proposed after Name and changed. Dedicated table/CSV retain selected identity and before/after names on no-op. CSV quotes strings and has presence columns for all optional identities and prior Name. Quiet hides only the table summary and no-header only headers; normal writer output/CSV column order are unchanged.",
+    "preservation": "No editor mutation or save with input/existing/new missing-directory save-as, no-op or failure. No source/destination/default/stamp/directory/cache/telemetry writes; no destination-writability or writer-serialization prediction. Existing old strings, opaque/missing/empty identity, duplicate proposed names and unrelated fields retain writer admission and raw storage. Actual writes still change only selected Name with unchanged API/results/save/stamp/no-op behavior.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*rename*; tests/dry_run.rs telemetry-enabled preservation snapshot; src/dry_run.rs fail-closed dispatch",
+    "limits": "Source-only read-only planning of one already supported stored selected-field ASCII edit. No new Unicode admission/normalization, native case, GUI Cancel/dialog refresh, native accepted-dialog/final-save/write-success prediction, live graph/role/visibility/permission claims, SPS/runtime/family or whole-file parity."
+  },
+  "per_mood_mix_edit": {
+    "command": "lox config lighting set-mood-mix FILE BLOCK --mood SID_OR_NAME (--mix | --no-mix) [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-mix-source.json",
+    "source_sha256": "bd64b3e3c7519b4ca1042b040f41f2d3ba0ec8a7aa99c4ad0db0c0aa94f90b70",
+    "defaults_extension_artifact": "tests/ux/light-controller2/mood-mix-default-source.json",
+    "defaults_extension_sha256": "f1a547c5eb82cb3acd734e7e853ffd924c58b70c0c5db35b73a51608e3adc478",
+    "cid_default_extension_artifact": "tests/ux/light-controller2/mood-mix-cid-default-source.json",
+    "cid_default_extension_sha256": "a026f171c7bfc96a11a0e4fa71c39a930ecd03559fdb4c35d5bb42cc3b222aff",
+    "native_selected_field": "Grid click0x1400ea4d0 column5 toggles selected record+0x98, bound to MixMod. The separate column6 role-mask transaction is not this API.",
+    "validation": "One direct collection and exact unambiguous direct mood; selected explicit SID1..31, nonnegative CID outside12..19 or omitted effective0, and ASCII case variants of MixMod=true/false or omitted effective/default false. Unsupported explicit identity/flag is not defaulted. All direct sibling SIDs must be signed32 decimals and selected numeric SID unique.",
+    "scope": "selected_record_role_independent",
+    "role_boundary": "Always reject CID12..19, even on requested no-op: native checkbox forcing/disablement depends on concrete owner/role state. No graph/role defaults, raw-flag escape hatch or cohort inference.",
+    "desired_state": "Idempotent requested-state wrapper around zero or one native column5 toggles. No mutual exclusion, sibling flag clearing, role-mask edits or ID swaps. Missing MixMod is source-backed false and stays omitted on false no-op; unsupported explicit values are rejected instead of defaulted or normalized. JSON retains raw before/after (null for omitted no-op), and adds before_effective/default false. Existing explicit values and CSV column order are unchanged.",
+    "cid_omission": "Missing CID has constructor/common-reader default0 and is eligible for the role-independent branch without identity insertion. JSON mood.cid remains raw null and cid_effective is0. Present malformed/negative/overflowing CID is still rejected, even on no-op. No role-state inference follows from this stored model default.",
+    "preservation": "Only selected MixMod changes. Keep all other records/flags, Qn, identities/spellings, count/width/order, SName, LSConfig, HCL, capabilities, sequences and unknown data; no incidental normalization.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*",
+    "extension_dependency": "Before CID12..19 support, recover concrete owner virtual+0x4b0 result, resolved record+0x20/+0x14 role index, active dialog+0x3a0 mask and accepted transport; column6 is a separate transaction.",
+    "limits": "Not a general raw boolean/cohort editor, complete GUI permission model, graph refresh, native accepted-dialog or physical/runtime mixing semantics."
+  },
+  "per_mood_mix_preview": {
+    "command": "lox config lighting set-mood-mix FILE BLOCK --mood SID_OR_NAME (--mix | --no-mix) --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-mix-preview-source.json",
+    "source_sha256": "0e6df98a7b33251a6e884f39a6bf1c1b511aacf11fb073440fd1d251c2a565dc",
+    "shared_plan": "Immutable preview_lighting_mood_mix and existing set_lighting_mood_mix use one private LightingMoodMixPlan with unchanged path selection, ordered validation, guards and LightingMoodMixEdit report. No XML cloning, writer-then-discard, diff simulation or generic mutation framework.",
+    "admission": "Exactly LightController2, one direct collection and one exact unambiguous stored SID/Name match. Selected explicit signed32 SID1..31, nonnegative signed32 CID outside12..19 or omitted effective0, ASCII true/false case variants or omitted effective/default false. Every direct sibling SID remains explicit signed32 and selected numeric SID unique. Existing unsupported/ambiguous errors remain identical even on no-op; no role-state or visibility inference.",
+    "formats": "JSON adds dry_run=true and optional trace_id to the existing writer report: raw mood UUID/SID/CID with cid_effective, raw MixMod before/after, before_effective and proposed effective enabled, default and changed. Boolean-specific table/CSV retain selected raw/effective values even on no-op; CSV presence columns distinguish absent from empty. Quiet hides only the table summary, no-header only headers. Normal writer output/CSV column order are unchanged.",
+    "preservation": "No editor mutation or save with input/existing/new save-as, no-op or failure. No source/destination/default/stamp/directory/cache/telemetry writes; no destination-writability or serialization prediction. Omitted MixMod/CID and original numeric/ASCII case spellings stay visible and are never normalized on effective no-op. Actual writes still change only selected MixMod through the existing writer with unchanged API/results/save/stamp behavior.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*mix*; tests/dry_run.rs telemetry-enabled preservation snapshot; src/dry_run.rs fail-closed dispatch",
+    "limits": "Source-only read-only planning of one already supported stored selected-field edit. No new mutation behavior, native case, GUI Cancel/dialog refresh, native accepted-dialog/final-save/write-success prediction, live graph/role/visibility/permission claims, SPS/runtime/family or whole-file parity."
+  },
+  "per_mood_cycling_exclusion_edit": {
+    "command": "lox config lighting set-mood-skip FILE BLOCK --mood SID_OR_NAME (--skip | --no-skip) [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-skip-source.json",
+    "source_sha256": "cdc9e17b3ec0d02778181bdc7bb6ce04311ba5bf91df3c08a8e23016f90ea70a",
+    "native_selected_field": "Grid click0x1400ea4d0 column4 toggles selected record+0x8c, bound as boolean SkipNext. The checkbox displays the inverse: checked means SkipNext=false.",
+    "missing": "Constructor initializes false; the common attribute reader clears its temporary string and compares against TRUE with param7=0. Omitted SkipNext therefore has effective/default false, while its raw storage remains absent.",
+    "validation": "One direct collection and one unambiguous exact stored SID/Name match. Selected explicit positive signed32 SID must be numerically unique among supported direct sibling SIDs. Explicit SkipNext supports ASCII true/false case variants; missing is supported, other explicit values are not defaulted.",
+    "desired_state": "Idempotent requested-state wrapper around zero or one native toggles. A false request on absent SkipNext preserves omission. Result reports raw/effective/default before, resulting storage, skip and inverse checkbox_checked.",
+    "role_boundary": "This column4 checkbox has no recovered MixMod SID1..31/CID12..19 restriction. Do not copy column5 role forcing or column6 role-mask semantics into this operation; unneeded CID is preserved without interpretation.",
+    "preservation": "Only selected SkipNext changes. Keep all other records/flags, Qn, identities/spellings, count/width/order, SName, LSConfig, HCL, capabilities, sequences and unknown data. No incidental Q1/HCL or full-dialog normalization.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*skip*",
+    "limits": "Source-backed selected-field transaction, not full GUI permissions, import reconciliation, accepted native save/reopen, physical cycling behavior or runtime parity."
+  },
+  "per_mood_cycling_exclusion_preview": {
+    "command": "lox config lighting set-mood-skip FILE BLOCK --mood SID_OR_NAME (--skip | --no-skip) --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-skip-preview-source.json",
+    "source_sha256": "1c3c59a2c9bebe22b68183abd39808e06c50ca81b591bb53110bcd812ad96d44",
+    "shared_plan": "Immutable preview_lighting_mood_skip and existing set_lighting_mood_skip use one private LightingMoodSkipPlan with unchanged path selection, ordered validation, guards and LightingMoodSkipEdit report. No XML cloning, writer-then-discard, diff simulation or generic mutation framework.",
+    "ordered_admission": "Exactly LightController2, one direct collection and one exact unambiguous stored SID/Name match. Parse explicit signed32 selected SID, require positive, then require every direct sibling SID to parse as signed32 and selected numeric SID to be unique including equivalent spellings, then require SkipNext ASCII true/false case variants or omitted effective/default false. Existing unsupported/ambiguous errors remain identical even on no-op. No MixMod SID1..31/CID12..19/role guard, Num reconciliation or graph/visibility predicate is imported; CID stays uninterpreted.",
+    "formats": "JSON adds dry_run=true and optional trace_id to the existing writer report: raw mood UUID/SID/CID, before.stored/effective/default, raw after, proposed effective skip, inverse checkbox_checked=!skip and changed. Dedicated table/CSV retain selected raw/effective values even on no-op; CSV presence columns distinguish omission. Quiet hides only the table summary, no-header only headers. Normal writer output/CSV column order are unchanged.",
+    "preservation": "No editor mutation or save with input/existing/new save-as, no-op or failure. No source/destination/default/stamp/directory/cache/telemetry writes; no destination-writability or serialization prediction. Omitted SkipNext, raw ASCII case and identity lexemes stay visible and are never normalized on effective no-op. Actual writes still change only selected SkipNext through the existing writer with unchanged API/results/save/stamp behavior.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*skip*; tests/dry_run.rs telemetry-enabled preservation snapshot; src/dry_run.rs fail-closed dispatch",
+    "limits": "Source-only read-only planning of one already supported stored selected-field edit. No new mutation behavior, native case, GUI Cancel/dialog refresh, native accepted-dialog/final-save/write-success prediction, live graph/role/visibility/permission claims, physical cycling, SPS/runtime/family or whole-file parity."
+  },
+  "per_mood_display_name_edit": {
+    "command": "lox config lighting set-mood-display-name FILE BLOCK --mood SID_OR_NAME (--name NAME [--normalize-ascii] | --clear) [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-display-name-source.json",
+    "source_sha256": "4ea43e1b3df825dcfb1c16417c18f6998dc0846194977c7a3fe0358f019ed9ae",
+    "ascii_extension_artifact": "tests/ux/light-controller2/mood-display-name-ascii-source.json",
+    "ascii_extension_sha256": "a233e3139a247fde8527d5aa9b75cfc0e889940b7022da1d68f9c2b06d5e1351",
+    "native_selected_field": "Grid column7 commit normalizes then unconditionally copies to record+0x30, bound as SName. Unlike column0 Name, an empty result is copied and clears the model string.",
+    "validation": "Reuse exact direct-record metadata selection. New names contain uppercase ASCII letters/digits and ordinary internal spaces with alphanumeric edges; other input fails instead of silently applying native transliteration, uppercase conversion or replacement.",
+    "ascii_opt_in": "Explicit --normalize-ascii permits lowercase ASCII via recovered native uppercase conversion then the same strict validation. No trimming, punctuation replacement or Unicode transliteration. Requires nonempty --name and conflicts with --clear. JSON normalized_from records supplied text when converted; after is actual storage, including a byte-preserving normalized no-op. Default strict API/output columns remain compatible.",
+    "clear": "Explicit --clear, mutually exclusive with nonempty --name. Change only a nonempty SName to explicit empty storage. Missing/already-empty is an exact-byte no-op; omission stays omitted. Empty optional native serialization can instead omit SName; no native-save byte equality or inherited-label semantics is claimed.",
+    "preservation": "Only selected SName changes. Name, all other records/fields, IDs, flags, outputs, widths/counts/order, LSConfig, HCL, capabilities, sequences and unknown storage remain unchanged.",
+    "tests": "tests/lighting_metadata_cli.rs: lighting_metadata_cli_display_name_*",
+    "limits": "Selected model/storage edit only, not full Unicode normalization, dialog permissions, physical display behavior, native accepted-dialog save/reopen or runtime parity."
+  },
+  "existing_mood_display_name_preview": {
+    "command": "lox config lighting set-mood-display-name FILE BLOCK --mood SID_OR_NAME (--name NAME [--normalize-ascii] | --clear) --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-display-name-preview-source.json",
+    "source_sha256": "50a0638e3b0ba96e293de514b1058705106750a9617247d90c1747d4e78623b5",
+    "shared_plan": "Immutable preview_lighting_mood_display_name and both existing set_lighting_mood_display_name / set_lighting_mood_display_name_ascii writers share one private LightingMoodDisplayNamePlan with unchanged ordered validation, direct selection and LightingMoodDisplayNameEdit report. No XML cloning, writer-then-discard, diff simulation or generic framework.",
+    "ordered_admission": "Existing flag/room guards remain. Explicit normalization alone uppercases ASCII before the same uppercase letters/digits/internal ordinary spaces and alphanumeric-edge validation; empty remains the existing API/explicit CLI clear. Then existing block resolution requires exactly LightController2, one direct LightscenesC and one direct mood matching exact stored SID spelling or case-sensitive Name. Numeric Name/SID collisions and multiple matches remain ambiguous. No numeric parsing/positivity/uniqueness, role/visibility/graph/permission, Num/boolean guard, deduplication, trimming, transliteration, new Unicode admission or length policy is added. Unsupported requested text remains an error even on identical stored-text no-op.",
+    "clear_and_noop": "Nonempty stored SName clears to explicit empty, never removal. Omitted/already-empty clear retains exact raw storage. Supported identical names and equivalent explicit ASCII normalization preserve storage; normalized_from still records converted input on no-op. Prior arbitrary strings may be replaced/cleared without revalidation.",
+    "formats": "JSON preserves writer fields (selected raw UUID/SID/CID, before, effective after, changed, normalized_from) and adds before_effective, after_stored, dry_run=true and optional trace_id. Null versus empty before/after_stored distinguishes omission from explicit empty; omission reads effective empty, not inheritance. Dedicated table/CSV retain selected raw identity, raw/effective before/after and actual normalization result even on clear/no-op. Table quotes present strings; CSV quotes strings and includes presence fields. Quiet hides only the table summary, no-header only headers. Normal writer output/CSV column order are unchanged.",
+    "preservation": "No editor mutation/save on success, no-op or failure, with input/existing/new missing-directory save-as. No source/destination/default/stamp/directory/cache/telemetry writes, destination-writability checks or serialization predictions. Only selected SName changes on actual write; raw Name, identities/flags/outputs, count/width/order, sequences, LSConfig, HCL, capabilities, siblings and opaque storage retain existing admission/preservation. Writer signatures/report/save/stamp/no-op behavior are unchanged.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs: lighting_metadata_display_name_preview_*; tests/lighting_metadata_cli.rs: lighting_metadata_cli_display_name_dry_run_*; tests/dry_run.rs telemetry-enabled preservation snapshot; src/dry_run.rs exact allowlist",
+    "limits": "Source-only read-only planning of one already supported stored selected-field operation. No new native case, GUI Cancel/dialog refresh, native accepted-dialog/final-save/write-success prediction, live graph/role/visibility/permission claims, physical display behavior, SPS/runtime/family or whole-file parity. Historical artifacts and separate native work are unchanged."
+  },
+  "numeric_identity_ambiguity_inspection": {
+    "command": "lox config lighting inspect FILE BLOCK",
+    "source_artifact": "tests/ux/light-controller2/identity-ambiguity-source.json",
+    "source_sha256": "b983fc55d96d5f54284736197f9f663f16f29b3f6a5f4d675b8c4e4de041766e",
+    "native_behavior": "SID and CID lookups return the first record with an equal signed32 member, independent of stored decimal spelling.",
+    "diagnostics": "Report duplicate_mood_sid for repeated positive signed32 SIDs and duplicate_mood_cid for repeated nonzero signed32 CIDs in exactly one direct collection. Identify the duplicate path and first matching direct record. Equivalent plus/zero-padded decimal spellings compare equal.",
+    "boundaries": "Repeated CID0 is allowed. Zero SID, missing, opaque and out-of-signed32 values are outside this duplicate check; existing diagnostics remain separate. Never join nested decoys or separate collections. No stored-duplicate warning is a prediction of Num-limited import.",
+    "formats": "Structured JSON diagnostics, or visible stderr for table/CSV including quiet/no-header.",
+    "preservation": "Read-only; preserve all raw values and file bytes without renumbering, default insertion, normalization or repair.",
+    "tests": "src/config_edit/lighting_tests.rs and tests/lighting_source_capability.rs: lighting_identity_inspection_*",
+    "limits": "Absence of duplicate diagnostics is not full uniqueness/import/editability or runtime admission."
+  },
+  "mood_boolean_case_extension": {
+    "source_artifact": "tests/ux/light-controller2/mood-boolean-case-source.json",
+    "source_sha256": "3307020080cae72026c1b3571273587e69b70643bdc2a33e6467286cf24604f8",
+    "reader": "Common native type0 reader compares case-insensitively with TRUE. Support only ASCII true/false case variants and proven omission defaults; do not copy arbitrary unequal-string-to-false coercion.",
+    "operations": "Shared flag parser serves selected option inspection plus existing guarded MixMod/SkipNext requested-state edits. No new mutation of Move, ReadOnly or Sequencing.",
+    "preservation": "No-op retains exact raw case spelling and all in-place bytes. A real change writes only selected requested flag as lowercase true/false; unrelated storage and role/identity gates unchanged.",
+    "unsupported": "Numeric, space-padded, opaque and non-ASCII lookalike flags remain unresolved/rejected before mutation.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*boolean_case*",
+    "limits": "Source-backed stored value subset, not native GUI/role/default/permission/runtime parity."
+  },
+  "selected_mood_option_inspection": {
+    "command": "lox config lighting inspect-mood-options FILE BLOCK --mood SID_OR_NAME [--room ROOM]",
+    "source_artifact": "tests/ux/light-controller2/mood-option-inspection-source.json",
+    "source_sha256": "25557a68de5896c6fb06b4e0d0eb98a73b92f2b657d1ec893420d48e9daa2b49",
+    "icon_extension_artifact": "tests/ux/light-controller2/mood-icon-id-source.json",
+    "icon_extension_sha256": "d4237f3d7fb956f672dc437d02db2c1f6fcc9fb8a787675648325a155292b48d",
+    "selection": "Reuse exact direct-record metadata selection; no fuzzy/nested/ambiguous match or identity insertion.",
+    "flags": "SkipNext, MixMod, ReadOnly, Sequencing and Move report stored/effective/default. ASCII true/false case variants are supported without rewriting raw spelling. Omission stays raw null with effective/default false; unsupported explicit flags remain unresolved with diagnostics.",
+    "projection": "Cycling is inverse SkipNext. Mix is direct for supported ordinary SID1..31/nonnegative CID outside12..19 (omitted CID effective0), role-dependent checked null for CID12..19, not-checkbox above SID31 and unresolved on unsupported needed identity/value. Projections are not promises of GUI state, visibility or write eligibility.",
+    "display_name": "Separate SName stored text; omission has effective/default empty string, not inheritance. No normalization is applied.",
+    "icon_id": "IID is a numeric icon reference, not an input binding: actual column3 constructs CIconDlg and converts selected icon UUID back to numeric IID. Report raw/effective signed32/default0 plus unresolved_catalog_mapping. Unsupported explicit data remains unresolved; no GUID/image/default-appearance/hardware mapping or icon assignment/clear is inferred.",
+    "formats": "Complete JSON with diagnostics; table and seven-column CSV include five flags, SName and IID. CSV STORED_PRESENT distinguishes omission from explicit empty text. Limitations remain visible with quiet/no-header.",
+    "preservation": "Read-only; no file save, stamp change, default insertion, normalization, ID/output/reference/sequence/HCL changes.",
+    "tests": "src/config_edit/lighting_metadata_tests.rs and tests/lighting_metadata_cli.rs: lighting_metadata_*option*",
+    "limits": "Stored model projection only, not current graph/role state, import, uniqueness/write admission, GUI permissions, accepted-dialog or runtime parity. Every edit still independently validates its target."
+  },
+  "pre_modal_graph_lookup": {
+    "issue": "lox-yqzp",
+    "artifact": "tests/ux/light-controller2/pre-modal-graph-lookup-source.json",
+    "sha256": "543952d3d49491c17f8f338128c5966c78e11deef98c9f982d2267af7b18a859",
+    "recovered": "Connector lookup uses registered type metadata counts plus channel index, not a literal AQn array join. Reference lookup follows native hierarchy links and stops an object's scan at the first missing/flag-excluded descriptor; it returns the first matching paired identity values.",
+    "blocked": "The exact connector constructor/loader and word+0x128 write, serialized-to-native hierarchy/identity binding, returned reference parent alias and concrete+0x7a8/+0xc68 results remain instance dependencies.",
+    "decision": "No document-specific preparation predictor, cancel-purity claim, normalization or success-shaped fallback. Publish the lookup contract, park prediction at these exact dependencies and continue independent capabilities.",
+    "native_validation": "No new native execution or readiness retry; old source and native case outcomes remain unchanged."
+  },
+  "stored_mood_editor_inspection": {
+    "command": "lox config lighting inspect FILE BLOCK",
+    "source": "Reuse numeric_mood_level_edit.source_artifact; classification and the numeric edit share one type/capability classifier.",
+    "JSON": "Each stored output has editor.kind (numeric/color/other/unresolved), type_tag, needed capability stored/effective/default and an issue when unresolved. unit and physical role remain unknown.",
+    "kinds": "Numeric and color follow the selected-mood renderer, not the first-scene effective/runtime helper. Other is outside the recovered numeric/color branches and is not an actuator classification. Unresolved covers unsupported raw values, needed capabilities, reader widths, indices and container/direct-mood shapes. Noncanonical Q0/Q01 remain in raw attributes, not classified output records.",
+    "capability": "Read only needed tag6 capability. Raw omission remains null with effective/default0; unsupported explicit masks remain raw with effective null and an issue, never a success-shaped default. Unneeded capability is null.",
+    "output_formats": "Table adds EDITOR. CSV retains the first five columns and appends EDITOR,TYPE_TAG,CAPABILITY_STORED,CAPABILITY_EFFECTIVE,ISSUE. Reasons and operation limitations remain visible with quiet/no-header.",
+    "operation_boundary": "Supported numeric kinds can use guarded set-mood-level, which still validates the target. set-mood-color remains a raw packed-value edit, not a mode-aware equivalent even when inspection reports color.",
+    "preservation": "Read-only; do not normalize values, Q tags, HCL, widths/counts, IDs, references, sequences or unknown data. No graph-refresh prediction, hardware role, full editability, accepted-dialog or runtime parity.",
+    "tests": "src/config_edit/lighting_tests.rs and tests/lighting_source_capability.rs: lighting_editor_inspection_*"
+  },
+  "incidental_normalization_triggers": {
+    "issue": "lox-n19e",
+    "artifact": "tests/ux/light-controller2/incidental-normalization-triggers-source.json",
+    "sha256": "702dcc2ee6caef199e4e777137a921176b2e12050a9c50dcb04e8136ab6172d0",
+    "numeric_output": "A programmatic numeric-control refresh can synchronously send the registered NEN_CHANGED notification into the same selected-scene clamp/write handler as a user edit, under its change/notification guards. Renderer, control-setter and handler guards are distinct.",
+    "HCL": "Dialog initialization calls HCL UI setup; setup invokes original-owner HCL type/temperature refresh and conditional time fill before the modal result. These are persisted-model writes, not immediate disk persistence.",
+    "remaining_dependencies": "Unique callback attribution for the historical native case was not traced. Exact per-instance temperature inputs and time adjustment/cache results, including0x1400e0340, remain unmodeled.",
+    "decision": "Trigger identification complete at this bound. No further normalization work is a delivery prerequisite; no incidental normalization is implemented or predicted by inspection. Historical source/native evidence stays unchanged; no new native run or extraction."
   },
   "static_bindings": [
     {
@@ -37,7 +408,7 @@
       "purpose": "channel metadata XML binder",
       "address": "0x1405c9740",
       "sha256": "4fca9e47230208412c4b3091206385beb40d7a68da0571ce59eac9146949fd50",
-      "observation": "Primary vtable offset 0x1180 binds NameAI%d, CapAI%d, PresM%d indices 0..17; nested calls use object offsets 0x1c78/+0x30 and 0x2218/+0x28. Names, capability masks and presence masks are not interpreted."
+      "observation": "Primary vtable offset 0x1180 binds NameAI%d, CapAI%d, PresM%d indices 0..17; nested calls use object offsets 0x1c78/+0x30 and 0x2218/+0x28. Names/presence remain raw; only the separately recovered selected-mood editor classification interprets needed CapAI bits, not physical channel roles."
     },
     {
       "purpose": "mood collection XML binder",
@@ -70,8 +441,298 @@
     "channel_roles": "unknown-no-AQn-to-Qn-or-NameAI-index-join",
     "document_versions": "raw-serialized-metadata-not-authentication",
     "unknown_xml": "read-only-structured-element-and-attribute-inventory",
-    "file_writes": "none",
-    "existing_mood_commands": "unchanged-list_moods-set_mood_color-add_mood-prior-art-not-newly-verified"
+    "file_writes": "Recount changes only Num; level editing changes selected numeric Qn payload/tag-preservingly; CID editing applies the explicit guarded identity/reference transaction; rename/mix change only their selected field. Existing writer formatting and Document Date/DateS updates retain normal behavior; inspection remains read-only.",
+    "existing_mood_commands": "One bounded CLI-create/Q2-edit/native-SaveAs/reopen storage observation is recorded above, not generic GUI-edit or color/runtime parity. Positive-index set_mood_color behavior is unchanged; add_mood recounts direct scenes and uses source-backed 18-output defaults and the separately approved automatic-ID policy; explicit-ID overrides remain legacy behavior."
+  },
+  "mood_count_repair": {
+    "command": "lox config lighting recount-moods FILE BLOCK [--room ROOM] [--save-as PATH]",
+    "purpose": "Repair a missing, invalid or stale LightscenesC Num from the number of direct LightsceneC records, not stored Num+1, an Outputs field, a Qn suffix or recursive descendants.",
+    "source_basis": [
+      {
+        "address": "0x1405b48e0",
+        "sha256": "09d4870c352d9621c32403f1fe1651967205f7b78c3bdc74866370f7714b14db",
+        "fact": "Successful scene append assigns collection +0x08 (Num) from scene-vector +0x20 size."
+      },
+      {
+        "address": "0x1405c6770",
+        "sha256": "0efeb2b4cecbacfd6fe9b5c9ff3bba036871f853d94f737bd8cd212595d5af15",
+        "fact": "LightController2 reconciliation independently assigns root+0x1c80 (collection Num) from root+0x1c98 (scene-vector size). This function also has other work which this count-only command does not reproduce."
+      },
+      {
+        "address": "0x1404b3b40",
+        "sha256": "f344e348a36af28aba2f72e242388dd348e977112af59e201601bca47825f0c2",
+        "fact": "Pointer-vector insertion grows logical size through 0x1404b3e70 when appending at the current size."
+      }
+    ],
+    "rules": [
+      "Require exact LightController2 and exactly one direct LightscenesC; reject absent, nested-only or duplicate direct containers before mutation.",
+      "Count direct LightsceneC children only, including distinct records with duplicate IDs; do not generate or repair identities.",
+      "Preserve an equivalent signed-32-bit decimal Num spelling such as 0002 or +2; an in-place no-op does not rewrite the file.",
+      "Explicitly replacing Num may expose previously under-counted records on native import; this is a requested storage repair, not native import simulation.",
+      "Leave both Outputs fields, absent Qn, opaque values, every unselected attribute, nested record, ID, reference and record order untouched.",
+      "An empty collection can be counted as zero, but native LightController2 import may subsequently create default scenes; no empty native-roundtrip claim.",
+      "Support JSON/CSV/table, --quiet, --no-header, room qualification and --save-as through the existing local-file writer."
+    ],
+    "inspection_diagnostic": "inconsistent_mood_count",
+    "tests": [
+      "src/config_edit/lighting_tests.rs: lighting_recount_*",
+      "src/config_edit/lighting_tests.rs: lighting_add_mood_recounts_direct_records_instead_of_incrementing_stale_num",
+      "tests/lighting_source_capability.rs: lighting_recount_cli_*"
+    ],
+    "validation_scope": "Independently authored XML tests only; no new native execution, GUI verification or runtime parity."
+  },
+  "existing_mood_count_repair_preview": {
+    "command": "lox config lighting recount-moods FILE BLOCK --dry-run [--room ROOM] [--save-as PATH]",
+    "source_artifact": "tests/ux/light-controller2/mood-count-repair-preview-source.json",
+    "source_sha256": "5323fb6920cb65e98e5382eb56a32e5864cbbf8f5b1d19f7390b7db77c0afa82",
+    "shared_plan": "Immutable preview_lighting_mood_count and existing recount_lighting_moods share one private typed LightingMoodCountPlan. Existing writer API/report and ordered room/file/XML/block/type/direct-container/direct-count/checked signed32 overflow guards are unchanged. No DOM clone, writer-then-discard, normalization or generic framework.",
+    "storage": "Repair only direct LightscenesC Num from direct LightsceneC records. Require exactly one direct collection and ignore nested lookalikes. Missing/empty/invalid/out-of-range/negative/stale Num repairs to decimal count; equivalent signed32 spellings such as 0002 or +2 remain exact no-ops. Both Outputs fields, absent/sparse Qn, identities, names, order, references, HCL, LSConfig, sequences and unknown storage retain existing semantics.",
+    "formats": "JSON flattens unchanged before/after/scenes/changed and adds dry_run, optional trace_id, scope, actual controller_uuid/controller_title, controller-relative collection_path XML child-node indices, before_effective and after_effective. before_effective is the existing signed32 parse, null when absent/invalid/out-of-range, negative when stored negative; not a native loaded-row count, default or clamp. after is actual planned storage even on no-op. Dedicated table/CSV retain raw absence/spelling and numeric count; CSV has presence columns and quoted escaping. Quiet suppresses only table summary, no-header only headers. Normal writer output is unchanged.",
+    "preservation": "Return before editor mutation, save, serialization, defaults, document stamping or destination handling for success/failure/no-op, including input/existing/new missing-parent save-as. No source/destination/directory/cache/telemetry writes or network requests. Actual execution retains existing in-place no-op byte/mtime preservation and explicit save-as behavior. Preview predicts no destination writability or final write success. Only RecountMoods newly enters global dry-run; unrelated unplanned operations remain fail-closed.",
+    "tests": "src/config_edit/lighting_tests.rs: lighting_recount_*; tests/lighting_source_capability.rs: lighting_recount_cli_dry_run_* and existing writer regressions; tests/dry_run.rs telemetry-enabled full filesystem/network preservation; src/dry_run.rs exact allowlist",
+    "limits": "Source-only read-only preview of an already supported CLI repair, not native UX button parity. No new native case/approval, family/whole-file/SPS/runtime credit, graph/role/color/identity/default/import normalization, GUI Cancel/dialog refresh or final-save/write-success prediction. Original native expectations and qualification contracts remain unchanged."
+  },
+  "recovered_count_and_output_contract": {
+    "named_question": "How do LightscenesC Num/Outputs and LightsceneC Outputs/Qn change when a mood is added or an output value edited, including sparse/missing values?",
+    "assumptions": "Version-pinned static normal-return dataflow on valid objects and successful allocation/helper calls. Not a complete heap-purity proof, all-callers proof, runtime result or channel-role model.",
+    "collection_layout": "Collection +0x08 is Num; +0x20 is scene-vector size; +0x50 is separately serialized Outputs. Binder 0x1405b8390 loops over Num, not the largest Qn or either Outputs field.",
+    "native_append": {
+      "caller": "0x1400e5b80",
+      "caller_sha256": "235e57ad9bb7a35282a090efe287656301dae8ff1b70d4bbdc1709f564af64f3",
+      "callee": "0x1405b48e0",
+      "observation": "The Lighting dialog passes its collection at dialog+0x130. Append constructs a scene with argument 0x12, appends the pointer, initializes each new primary output from the first scene's corresponding stored value masked with 0xf0000000 (or zero when outside that source vector), and assigns Num from actual vector size. This is not zero-filling every remaining output and is not evidence that collection Outputs controls scene width.",
+      "constructor": "0x1405b3940",
+      "constructor_sha256": "365a8a5e0bc05163fab3b2547924119c7731291b550d9e33fb2df9614ebe4155",
+      "constructor_observation": "The constructor assigns scene+0x9c (Outputs) from its argument and sizes primary +0x48 and secondary +0x68 integer vectors. The observed append argument 0x12 is this path's construction width, not a universal maximum."
+    },
+    "native_value_edit": {
+      "address": "0x1400e6460",
+      "sha256": "e3bbb93c4599b98a3d7a5986dcf68dd17facb3a53f319f2bc296af1c8c7eea7d",
+      "observation": "This specific numeric dialog handler clamps its control value to 0..100 and replaces the selected existing primary-vector slot with (old & 0xf0000000) | value. Its body does not assign Num, either Outputs field, or resize the vector. This is not a generic color/sequence handler or an admission that every Qn is a percentage."
+    },
+    "dialog_copy_back": {
+      "caller": "0x14019de60",
+      "caller_sha256": "c10b26a56014eb1b4fac6378deef6935e3bb39ca27fda83c168860af2d627f0b",
+      "observation": "The LightController2 branch copies root+0x1c78 into the dialog's temporary collection. On modal return value 1 it invokes that original collection's +0x28 slot with the temporary collection; the other branch at this site does not copy it back.",
+      "collection_copy": "0x1405b4e50",
+      "collection_copy_sha256": "66970d9b503110b317d922ffa6d3f3b957f70e17252de67287df9e663afd7f32",
+      "slot_pointer_address": "0x1410195a0",
+      "slot_pointer_sha256": "35d35c522183e90a2e54c35edf702c0af5f5e0c670d258198d02e83e6c30c569",
+      "copy_observation": "The frozen PE pointer resolves collection +0x28 to this copier. For copy mode 0 it assigns destination Num from source vector size and copies collection Outputs separately from source +0x50, then copies each scene. It does not derive scene Outputs from collection Outputs as a final invariant.",
+      "scene_copy": "0x1405b4bc0",
+      "scene_copy_sha256": "0474ef4d60b41e52680e9178c50e2defb4ce3e351ed432116c0f7413fb37218a",
+      "scene_copy_observation": "Copies per-scene Outputs from source +0x9c, identities/flags and both integer vectors. The optional SeqConf copy branch is resolved in recovered_edit_save_transaction below; full sequence preservation/parity remains unclaimed."
+    },
+    "sparse_native_read": {
+      "binder": "0x1405b7df0",
+      "observation": "On the reader branch, a zero/missing per-scene Outputs becomes 0x0c before primary/secondary vector sizing; Q1..QOutputs are read individually. The common attribute dispatcher clears its string, missing attribute lookup returns null, and type-5 numeric parsing of the resulting empty string returns zero. Thus an absent in-range Qn is reconstructed as zero on this particular native reader path, not known zero stored XML. Fields beyond that read bound are not loaded by this loop.",
+      "helper_pins": [
+        {"address": "0x1404c52f0", "sha256": "057c5670bc1b4a95f3b6ae5720f34f057330ba62605c4d0211ac7565de681262"},
+        {"address": "0x1404c0750", "sha256": "3eda925fe12187eb5e3c87544abca343040c659c4f68b89127dd45f5307214f9"},
+        {"address": "0x140421440", "sha256": "0138afa4ef15c51c4d545bfbbb8fc241b6651aec045cbe66b9a483822654af3f"},
+        {"address": "0x14041fe40", "sha256": "f8e4d298ee8a61db7d0db1a440b15791378452073dcaecec4ca1c8988b683092"},
+        {"address": "0x140422760", "sha256": "361f5c3173c2b395766f14baa7a142bc2c1f734f9c04c21be691eb3169ff591d"}
+      ],
+      "stored_inspection_policy_unchanged": "Missing Qn remains absent/null; inspection and count repair never synthesize the native reader's zero."
+    },
+    "caller_specific_width_normalization": [
+      {
+        "address": "0x1405c9740",
+        "sha256": "4fca9e47230208412c4b3091206385beb40d7a68da0571ce59eac9146949fd50",
+        "observation": "Calls the collection binder, then assigns root+0x1cc8 (collection Outputs) to 0x12. This is after the nested serialization call, not equality inferred from a metadata loop."
+      },
+      {
+        "address": "0x1405d1580",
+        "sha256": "16512152985127a4f4455e3002399b715a8a9743455ee61c3fa27a954fbde0e6",
+        "observation": "Calls primary +0x1180, then on the reader branch calls 0x1405b70e0(scene,0x12) for each counted scene. That helper separately assigns scene Outputs and resizes both vectors. This subsequent normalization does not restore higher Qn fields skipped by the earlier per-scene read loop."
+      }
+    ],
+    "remaining_dependencies": [
+      "Existing add_mood assigns Num from the resulting direct scene count and uses native_style_mood_initialization plus the separately approved default in recovered_mood_identity_allocation. Selected Q1 and explicit-ID overrides remain CLI behavior, not full native append/import parity.",
+      "Named post-copy hooks, save dispatch and optional SeqConf copy are recovered in recovered_edit_save_transaction. Conditional pre-modal original-member writes are recovered in recovered_pre_modal_cancel_effects. Whole-document cancel/no-op behavior and unrelated UI/runtime callbacks remain outside scope.",
+      "No universal channel maximum, AQn/Qn/NameAI role mapping, full RGB/sequence edit semantics, arbitrary malformed-number behavior or full-family/runtime parity is established."
+    ]
+  },
+  "native_style_mood_initialization": {
+    "issue": "lox-zuo1",
+    "command": "lox config add-mood FILE BLOCK --name NAME --color COLOR [--sid SID] [--cid CID] [--save-as PATH]",
+    "compatibility": "Use the recovered 17.2.10.21 append-path output initialization instead of mirroring collection Outputs and zero-filling unselected outputs. Explicit user-selected Q1 is preserved. The separately approved identity default and preserved explicit overrides are defined in recovered_mood_identity_allocation.",
+    "source_basis": [
+      {"address": "0x1405b48e0", "sha256": "09d4870c352d9621c32403f1fe1651967205f7b78c3bdc74866370f7714b14db", "fact": "Constructs a scene with width 0x12, appends it, and initializes each primary slot from the first scene's corresponding value masked with 0xf0000000; outside-source-vector values become zero."},
+      {"address": "0x1405b7df0", "sha256": "9f0ff6bd3dcc724a599e3324483c9b584f1e1128c4a3d6bf9604ecc328bf9d58", "fact": "Reader uses per-scene Outputs, with missing/zero mapped to 0x0c, and reads only that Qn bound. Missing in-range values reconstruct zero on the previously recovered helper chain."},
+      {"address": "0x1405d1580", "sha256": "16512152985127a4f4455e3002399b715a8a9743455ee61c3fa27a954fbde0e6", "fact": "Reader-only later width normalization to 0x12 does not re-read higher stored Qn skipped by the earlier scene bound."}
+    ],
+    "rules": [
+      "Require exactly one direct LightscenesC and choose its first direct LightsceneC, ignoring nested lookalike records.",
+      "Create Outputs=18 and Q1..Q18. This is the recovered construction width, not a universal maximum or an AQn/Qn role join.",
+      "The explicit selected color replaces Q1; its source spelling/value is not interpreted. For Q2..Q18 preserve only the signed-32-bit source value's high nibble, after applying the first scene's reader bound. Missing values or positions outside that bound initialize zero.",
+      "Missing/zero first-scene Outputs means 12. Positive widths must fit signed 32 bits; invalid/negative/out-of-range widths and needed opaque/out-of-range values are rejected atomically instead of guessed.",
+      "An empty collection has no inherited types. Existing records, sequence/unknown data, widths and the raw collection Outputs remain unchanged.",
+      "CLI authoring operates on existing direct XML records and recounts the resulting records even if stored Num was stale; it does not simulate native import discarding records or injecting built-in scenes."
+    ],
+    "tests": ["src/config_edit/lighting_tests.rs: lighting_native_append_*", "tests/lighting_native_append.rs"],
+    "limits": "This section covers source-backed output initialization and synthetic/CLI persistence only; identity policy is defined separately below. No new native GUI observation, whole-load/save transaction, universal channel limit, full color/sequence or runtime parity."
+  },
+  "recovered_edit_save_transaction": {
+    "issue": "lox-tp6y",
+    "named_question": "After accepted Lighting dialog copy-back, which post-copy/save/SeqConf operations can change scene count, widths or Qn values, and what differs on cancel?",
+    "assumptions": [
+      "Frozen 17.2.10.21 AMD64 static normal-return dataflow; valid distinct objects, successful allocations and ordinary member/string/vector helper behavior.",
+      "Resolved connector getters and graph traversal/label helpers operate on their indicated objects, without reentrant scene edits or aliasing scene vectors to unrelated members.",
+      "No generic heap-purity or factory-ownership proof, native ABI execution, GUI verification, disk-commit guarantee or runtime parity is claimed.",
+      "The accepted branch is not itself a save. Serializer order below applies when the common XML dispatcher reaches the recovered virtual call."
+    ],
+    "accepted_vs_cancel": {
+      "caller": "0x14019de60",
+      "reused_copy_targets": ["0x1405b4e50", "0x1405b4bc0"],
+      "accepted": "Modal return 1 copies the temporary scene collection and selection data back, copies channel metadata, then runs owner notifications/refresh, 0x1401483a0(owner,block) and 0x140469a90(block). Existing copy-back recounts Num from the source vector and copies collection Outputs and each scene's Outputs/Q vectors independently.",
+      "cancel": "Other modal returns skip that copy-back and the accepted-only post-copy hooks, then destroy the temporary dialog. As recovered in recovered_pre_modal_cancel_effects, preparation can conditionally write original XML-bound members before the dialog snapshot, with no explicit rollback at this cancel branch. This is not a whole-document cancel/no-op or disk-persistence guarantee.",
+      "conditional_refresh": "Accepted-only primary +0xf20 resolves to 0x1405c80a0 when the owner flags permit it; its explicit work resets controller/connector/runtime state and reads scene values, not Num, scene Outputs or the primary Q vector. Its base refresh callbacks are subject to the stated ordinary-helper assumption."
+    },
+    "post_copy_hooks": [
+      {
+        "address": "0x1401483a0",
+        "sha256": "8f376f2d8164a3c8064bede1819ebd15877c8c7e0a7fb3973126acb5a75a8450",
+        "observation": "Finds references through 0x1404fa990, copies the block's +0x58 string to referencing objects and invokes 0x1401484c0 on references and the original block. That helper traverses connectors and refreshes labels of linked type-0x139/0x13a objects through 0x1406f1840. No direct scene count, width or Q-vector assignment is present on these recovered paths."
+      },
+      {
+        "address": "0x140469a90",
+        "sha256": "c5418e1b07d7ea6918c93f6164e6e8248dd94a61c5424c8d6d5769fe36d99665",
+        "observation": "Conditionally sets block +0x2e8 bit 0x20000000, enumerates connectors through primary +0x4b0 (0x140446520), collects connected objects with 0x1404462d0 and recursively marks them. It does not directly assign Num, either Outputs field or Q values. This is graph dirty propagation, not a second scene copier or width normalizer."
+      }
+    ],
+    "save_dispatch": {
+      "common_serializer": "0x14047e260",
+      "common_serializer_sha256": "324b61caabd1aa8c0529020bbf3df31c502ef5a7f3763655ceb15be3e53dbb6b",
+      "callsite": "0x14047f66c",
+      "primary_vtable": "0x14101a190",
+      "slot_offset": "0x40",
+      "slot_pointer_address": "0x14101a1d0",
+      "target": "0x1405d1580",
+      "target_sha256": "16512152985127a4f4455e3002399b715a8a9743455ee61c3fa27a954fbde0e6",
+      "order": [
+        "Invoke primary +0x1180 -> 0x1405c9740. Its nested collection binder serializes collection Num/Outputs and scenes first; collection Outputs is then assigned 0x12 in memory.",
+        "Bind the separate root+0x1cd0 IoData member, then call 0x1405c6770 without a reader/writer-mode guard.",
+        "Reconciliation assigns every zero in-memory scene SID from 0x1405b5560, then Num from the actual scene-vector size. This separate helper searches free 1..99 and can return zero when exhausted; CLI append deliberately rejects exhaustion instead.",
+        "If the actual scene vector is empty, reconciliation sets collection Outputs to 0x12 and calls 0x1405c4ac0, which appends the two missing built-in SID 0x309/0x30a scenes. The first is initialized through 0x1405ccb60, including primary Q values. This is a genuine count/width/value-changing path, not merely recounting.",
+        "Only on the reader branch, after those steps, 0x1405b70e0(scene,0x12) assigns each counted scene Outputs and resizes both integer vectors; it does not re-read fields skipped by the earlier reader bound."
+      ],
+      "writer_consequence": "On the writer path, collection/scene serialization precedes reconciliation. Later in-memory Num/SID/default-scene changes are not retroactively emitted by the already completed nested calls; a later serialization can observe them. The writer does not take the reader-only scene-width normalization branch, and scene Qn serialization uses the actual primary vector size, not collection Outputs.",
+      "scope": "Recovered member-level serialization order, not an assertion about every Save UI entry point, whole-document normalization, physical file replacement or malformed documents."
+    },
+    "optional_seqconf_copy": {
+      "scene_member_offset": "0xb0",
+      "factory": "0x1405b5220",
+      "factory_sha256": "ee907ba9c7e8723a949b315c45ab987f06bd888a372d79e7c27d5ee9461c3d27",
+      "vtable": "0x141019538",
+      "copy_slot_offset": "0x8",
+      "copy_slot_pointer_address": "0x141019540",
+      "copy_target": "0x1405b50c0",
+      "copy_target_sha256": "ba7d3a60937c932d9dad8a9591ef622f1c1fb2dcd521f8a2545f368d86f69007",
+      "entry_copy": "0x1405b4f70",
+      "entry_copy_sha256": "b5169d839f6fd8cd019f9ee878e6d7d5fcce24685b9a4a96e55ad61729a7bbf0",
+      "observation": "Scene copy enters this optional branch only when source +0xb0 exists. It counts source sequence entries having a nonzero payload-vector size; if any exists, the resolved config copier clears destination entries and copies all nonnull source entries at their indices via 0x1405b4810. Static bytes confirm the source entry is the third (R8) argument omitted from that helper call in pseudocode. Entry copy duplicates its color payloads and selected metadata; 0x1405b4810 resets entry +0x10. With no nonempty source entry the optional config is not copied. This path does not write collection Num, either Outputs field or either already copied Q vector.",
+      "serialization": "Config binder 0x1405b88e0 emits no SeqConf when every sequence payload is empty, and emits seqN records only for nonempty entries. Entry binder 0x1405b8610 can normalize its IpType storage to 4 unless it is 4 or 5, on either read or write. These are nested sequence effects, not a Qn role/encoding model or full sequence-preservation promise."
+    },
+    "inspection_diagnostics": {
+      "command": "lox config lighting inspect FILE BLOCK",
+      "native_empty_mood_collection_reinitialized": "Warn only for exactly one direct collection with an explicitly parsed signed-32-bit Num=0 and no direct scene records. Do not equate missing/invalid Num or nested-only records with a known native empty vector.",
+      "native_zero_mood_sid_reconciled": "Warn only when exactly one direct collection has an explicitly parsed nonnegative signed-32-bit Num matching its actual direct scene count, and a direct scene has an explicitly parsed signed-32-bit zero SID. Native loading iterates Num; missing/invalid/negative/under-counted/over-counted Num therefore suppresses this diagnostic rather than assuming every stored scene is loaded. Missing, malformed or out-of-range SID is not inferred to be zero, and no replacement ID is generated.",
+      "preservation": "Read-only in JSON/table/CSV, including --quiet: retain BOM/line endings, identities, sparse/opaque Qn, Outputs, unknown nested data and all original bytes. No native save simulation or append/default policy change.",
+      "tests": ["src/config_edit/lighting_tests.rs: lighting_transaction_*", "tests/lighting_transaction_capability.rs"]
+    },
+    "remaining_dependencies": [
+      "The named pre-modal preparation's conditional original-member effects are recovered in recovered_pre_modal_cancel_effects. Whole-document cancellation, unrelated owner/UI callbacks and reentrancy/alias safety remain outside scope. Concrete XML prediction needs the selected connector/reference/parent identities and virtual results listed in its source summary.",
+      "No mutation reproduces default-scene creation, existing zero-SID reconciliation or sequence normalization. Output initialization and identity authoring policies are defined separately; selected Q1 remains explicit CLI behavior.",
+      "No complete sequence/color semantics, universal channel limit, AQn/Qn/NameAI role mapping, malformed-number behavior or full editor/GUI/runtime parity."
+    ]
+  },
+  "recovered_mood_identity_allocation": {
+    "issue": "lox-1ao7",
+    "named_question": "How does the selected native Lighting append allocate and validate SID/CID, including gaps, exhaustion, duplicate explicit requests and special IDs?",
+    "semantic_summary": {
+      "path": "tests/ux/light-controller2/mood-identity-source.json",
+      "sha256": "f87fd01748a506bffe068c761faaaa16d1928f214f06179a4786cb9f63cc101e",
+      "encoding": "UTF-8 without BOM, LF",
+      "kind": "independently-authored-source-semantics",
+      "native_execution_performed": false,
+      "gui_validation": "unrun"
+    },
+    "selected_dataflow": {
+      "caller": "0x1400e5b80",
+      "append": "0x1405b48e0",
+      "selection": "The caller passes dialog+0x130, owner+0x8c and param3=0. The constructor zeroes SID/CID before insertion. The append body has its own allocator, not a call to 0x1405b5560.",
+      "field_binding": "Binder 0x1405b7df0 and frozen SID/CID labels at 0x141019674/0x141019678 identify scene+0xa4 as SID and +0xa8 as CID.",
+      "static_proof": "Canonical function hashes, exact line ranges and direct-call/string/omitted-parameter byte pins are recorded in the semantic summary; private source paths are not published."
+    },
+    "native_append": {
+      "automatic_sid": "Lowest unused SID in 1..99, filling gaps. If all are occupied, retain the appended scene with SID0; this path does not return an exhaustion error.",
+      "explicit_sid": "An unused nonzero param3 is stored directly with CID0, including values above99 or special-role SIDs. An occupied nonzero request falls back to automatic allocation instead of failing.",
+      "automatic_cid": "For automatic SID1..8, try only CID=SID+11. If occupied, leave CID0; do not search another CID. Automatic SID9..99 leaves CID0. Exhaustion SID0 tries CID11 under the same collision rule.",
+      "explicit_cid": "Not an argument to this append function. A different dialog handler, 0x1400e6200, swaps a nonzero occupied requested CID with the selected scene's previous CID, then applies SID role/remapping logic. CID0 does not trigger the swap. This is not equivalent to CLI --cid.",
+      "special_ids": "SID1 is a normal automatic candidate. Separate handlers create SID777/CID22 and SID778/CID11 defaults and map CID24 to SID776. None establishes a universal append-forbidden set or a global maximum; the automatic scan bound is not an explicit-SID limit.",
+      "later_reconciliation": "0x1405c6770 uses separate helper 0x1405b5560 for zero SIDs. That helper also returns zero if 1..99 remain occupied. It is not evidence that native append exhaustion is atomic."
+    },
+    "cli_compatibility": {
+      "native_identity_default_adopted": true,
+      "approved_policy": "Separately approved native-default-safe: with neither --sid nor --cid, use lowest-free SID1..99 and the single native CID candidate. If all99 SIDs are occupied, return mood_identity_exhausted before mutation instead of native SID0.",
+      "storage_scope": "Use actual direct stored scenes, not native Num-limited import. Absent IDs reserve no candidate; present needed identities must be signed-32-bit decimals or fail atomically with unsupported_mood_identity_value. CID is not interpreted for a new SID above8. Existing spellings, IDs and records are not normalized.",
+      "preserved_overrides": "Supplying either --sid or --cid preserves the legacy override path: omitted partner max-custom-plus-one/base2/base9 with SID1/776/777/778 excluded from maxima, duplicate-SID errors, and accepted duplicate CID overrides. This is not native explicit-request fallback or CID swapping.",
+      "safety_improvement": "An overflowing signed-64-bit legacy partner successor returns mood_identity_exhausted before mutation rather than panic/wrap. Output initialization and recounting are unchanged.",
+      "focused_tests": "tests/lighting_identity_source.rs and src/config_edit/lighting_tests.rs cover native gap/CID rules, atomic exhaustion/unsupported identities, legacy overrides/overflow, and persistence/in-memory preservation."
+    },
+    "limits": "Version-pinned static normal-return result on valid objects and successful helpers. The semantic examples are not native executable cases. No new extraction, GUI/native execution, full load/save/role-normalization model or runtime parity; no unresolved callee blocks this bounded identity result."
+  },
+  "recovered_pre_modal_cancel_effects": {
+    "issue": "lox-1gnb",
+    "semantic_summary": {
+      "path": "tests/ux/light-controller2/pre-modal-source.json",
+      "sha256": "b7f02b855a66d5efb1d79ee2156dc7315824d0c120829768806fafbf03fed4bf",
+      "kind": "independently-authored-source-semantics",
+      "native_execution_performed": false,
+      "gui_validation": "unrun"
+    },
+    "caller": "0x14019de60",
+    "preparation": "0x1404ca730",
+    "scope": "Frozen17.2.10.21 AMD64, original LightController2 type0x1e4, null third argument and mode-1, native indices0..17 only.",
+    "order": "Construct dialog; prepare original controller; conditionally notify owner; snapshot prepared values into dialog; run modal; accepted-only copy-back remains the previous contract.",
+    "gate": "A referencing object is found, and either the original NameAI<i> string is empty or the corresponding native output connector exists with its 32-bit +0x128 word equal to zero.",
+    "ordinary_reference": "Unparented types other than0x140/0x163 assign the reference label/fallback. At this -1 callsite they bypass nonnegative-mode scene retagging and default initialization.",
+    "special_reference": "For unparented type0x163, connector+0x128 zero and matching virtual+0x4b0 connection identity permit retagging in-range existing primary Q values to tag4, preserving low28 bits. No SID777 initialization on that branch.",
+    "parent_or_0x140_reference": "The selected parent/self branch conditionally fills an empty NameAI<i> and ORs the COName bit when classification is zero, writes CapAI<i> from reference+0x7a8, retags existing in-range primary Q using selected-object+0xc68, then calls the existing SID777 initializer. All remain subject to the common gate; Q/capability writes do not separately require an empty name.",
+    "default_scene": "0x1405ccb60 finds existing SID777, if any, and replaces that channel's in-range Q payload with a type-dependent default, retaining its current tag. No scene is created by this helper.",
+    "cancel": "These original-member writes precede the modal result. The non-accepted branch skips dialog copy-back and has no explicit rollback of the preparation writes. Cancel does not imply a whole-document no-op. Equal-value assignments are possible, so a nonzero preparation result is not proof of a byte difference.",
+    "persistence": "Written members bind to NameAI<i>, CapAI<i>, COName and LightsceneC Q<i+1>. This is in-memory persisted-model state, not immediate disk persistence or a guaranteed later save.",
+    "explicit_write_bounds": "No explicit Num, scene Outputs, identity, primary-vector resize, secondary-vector or SeqConf write was found in preparation or the inspected SID777 initializer. This is not global purity.",
+    "assumptions": [
+      "Valid native objects, consistent vectors, successful allocations and ordinary member/string/vector helpers.",
+      "Graph/label/virtual getters operate on indicated objects, with no unexpected scene-storage aliases or reentrant document edits.",
+      "Ordinary dialog destruction is cleanup, not an undisclosed original-controller rollback; unrelated UI callbacks remain outside scope."
+    ],
+    "cli_decision": "Evidence-only: no new diagnostic or mutation. Actual XML-to-native connector/parent/lookup aliases and concrete virtual-class results must be established before predicting this risk for a document.",
+    "native_validation": "unrun"
+  },
+  "existing_mood_edit_validation": {
+    "surface": "config set-mood-color --output-index",
+    "rule": "Reject output index zero before any XML mutation, including when opaque raw Q0 storage already exists. Native mood Qn indices are one-based.",
+    "source_premise": {
+      "binder": "0x1405b7df0",
+      "binder_sha256": "9f0ff6bd3dcc724a599e3324483c9b584f1e1128c4a3d6bf9604ecc328bf9d58",
+      "observation": "Both serializer branches format Q%d from the loop index plus one. The Q%d literal at 0x140fee8e4 was checked directly against the frozen target PE identified in provenance.",
+      "scope": "Serialized field naming only, not channel roles, configured output limits or runtime behavior."
+    },
+    "compatibility": [
+      "Nonzero edits may explicitly set an absent Qn; attribute absence alone does not establish an invalid or unconfigured output.",
+      "No maximum is inferred from Outputs, channel metadata or a Qn suffix.",
+      "Accepted edits preserve every other stored attribute, identity, nested record, reference and output spelling/order.",
+      "Generic raw XML set-attr remains unchanged and lossless; existing opaque Q0 data is not removed or normalized."
+    ],
+    "regressions": "src/config_edit/lighting_tests.rs: lighting_mood_edit_*; tests/config_integration.rs: config_set_mood_color_rejects_zero_index_without_writing; independently authored XML, not native fixtures",
+    "later_storage_evidence": {
+      "receipt": ".reverse-engineering\\native-simulator\\workstreams\\lighting-envelope-recovery\\visual-continuation-20261107\\portable-lighting-roundtrip-evidence.json",
+      "sha256": "47a711c9f7c8afcf6e1684c1108891c1b5211f0fdfb293bce40294abfd537979",
+      "scope": "Later native-baseline Lighting stored-graph preservation with explicit project delta; not an edited-mood roundtrip, whole-project no-op or family/runtime parity. Initial failed snapshots below remain historical failures."
+    }
   },
   "authored_fixture": {
     "path": "tests/ux/light-controller2/synthetic.Loxone",
@@ -108,7 +769,7 @@
       "Owned authored fixture open -> inspect actual version/hash identity; fresh mood/channel dialog inventory; save without changes and compare exact owned before/after XML with normalization explained. No input until parent grants lease.",
       "On owned copy, change exactly Q2 in one existing mood using prior-art set-mood-color pinned isolated CLI; verify actual mood and channel GUI readback, save/reopen and compare all UUID/SID/CID/Outputs/other Qn/wires/unknown records.",
       "Countercase: distinct Q1/Q2/Q10 and a missing Qn must not become a default zero or wrong channel; incompatible actuator/unknown encoding stays unsupported.",
-      "Countercase: cancel GUI dialog then save/reopen; unchanged owned XML and IDs. No capability promotion until these fresh version-bound results exist."
+      "Countercase: capture original/prepared state, cancel GUI dialog, then independently save/reopen and attribute differences to the recovered preparation versus accepted-only edits. Do not assume Cancel is a whole-document no-op. No capability promotion until fresh version-bound results exist."
     ],
     "guards": "exact PID/hash/start/session/foreground/overlap/offline fence; source helper snapshots per run; 64px inset; unexpected dialog abort; no production connection, private ABI, memory writes, clock/DPI changes or recurring jobs",
     "native_behavior": "unadmitted; current official reader is EnergyManager OL1..3 only and must not be repurposed"

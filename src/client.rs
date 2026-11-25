@@ -1,9 +1,16 @@
 //! Loxone HTTP client, control resolution, and structure cache
 
 use anyhow::{Context, Result, bail};
+pub use lox_core::autopilot_catalog::AutopilotRule;
+use lox_core::autopilot_catalog::{AutopilotCatalog, RuleResolutionError, resolve_rule};
+pub use lox_core::control::{Control, is_uuid};
+use lox_core::control::{
+    ControlQuery, IdentifierError, PreparedControlQuery, ResolutionError, matches_text,
+};
+use lox_core::control_catalog::{ControlCatalog, ControlFilter};
+use lox_core::structure_metadata::StructureMetadata;
 use reqwest::blocking::Client;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -15,7 +22,7 @@ const HTTP_TIMEOUT_SECS: u64 = 10;
 const RETRY_DELAYS_MS: [u64; 3] = [200, 400, 800];
 const CACHE_TTL_SECS: u64 = 86400;
 /// Loxone epoch: 2009-01-01T00:00:00Z as Unix timestamp.
-pub const LOXONE_EPOCH_SECS: u64 = 1_230_768_000;
+pub use lox_core::LOXONE_EPOCH_SECS;
 
 // ── Global verbosity ─────────────────────────────────────────────────────────
 
@@ -26,7 +33,7 @@ pub fn set_verbose(level: u8) {
     VERBOSE.store(level, Ordering::Relaxed);
 }
 
-fn verbose() -> u8 {
+pub(crate) fn verbose() -> u8 {
     VERBOSE.load(Ordering::Relaxed)
 }
 
@@ -77,7 +84,7 @@ pub struct HttpStatusError {
 }
 
 /// Log a response body at -vv level, truncating large responses.
-fn log_body(body: &str) {
+pub(crate) fn log_body(body: &str) {
     if body.len() > 500 {
         // Find a UTF-8 safe truncation point at or before byte 500
         let truncated = &body[..body.floor_char_boundary(500)];
@@ -98,29 +105,6 @@ impl std::error::Error for HttpStatusError {}
 use crate::config::Config;
 
 pub const USER_AGENT: &str = concat!("lox-cli/", env!("CARGO_PKG_VERSION"));
-
-// ── AutopilotRule ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct AutopilotRule {
-    pub name: String,
-    pub uuid: String,
-    pub state_changed: String,
-    pub state_history: String,
-}
-
-// ── Control ───────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct Control {
-    pub name: String,
-    pub uuid: String,
-    pub typ: String,
-    pub room: Option<String>,
-    pub cat: Option<String>,
-    pub is_favorite: bool,
-    pub is_secured: bool,
-}
 
 // ── LoxClient ─────────────────────────────────────────────────────────────────
 
@@ -408,108 +392,25 @@ impl LoxClient {
         favorites_only: bool,
     ) -> Result<Vec<Control>> {
         let structure = self.get_structure()?;
-        let mut rooms: HashMap<String, String> = HashMap::new();
-        if let Some(map) = structure.get("rooms").and_then(|r| r.as_object()) {
-            for (uuid, room) in map {
-                if let Some(name) = room.get("name").and_then(|n| n.as_str()) {
-                    rooms.insert(uuid.clone(), name.to_string());
-                }
-            }
-        }
-        let mut cats: HashMap<String, String> = HashMap::new();
-        if let Some(map) = structure.get("cats").and_then(|c| c.as_object()) {
-            for (uuid, cat) in map {
-                if let Some(name) = cat.get("name").and_then(|n| n.as_str()) {
-                    cats.insert(uuid.clone(), name.to_string());
-                }
-            }
-        }
-        let mut controls = Vec::new();
-        if let Some(ctrl_map) = structure.get("controls").and_then(|c| c.as_object()) {
-            for (uuid, ctrl) in ctrl_map {
-                let name = ctrl
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("?")
-                    .to_string();
-                let typ = ctrl
-                    .get("type")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("?")
-                    .to_string();
-                let room_uuid = ctrl
-                    .get("room")
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let cat_uuid = ctrl
-                    .get("cat")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let room = rooms.get(&room_uuid).cloned();
-                let cat = cats.get(&cat_uuid).cloned();
-                let is_favorite = ctrl
-                    .get("isFavorite")
-                    .and_then(|f| f.as_bool())
-                    .unwrap_or(false);
-                let is_secured = ctrl
-                    .get("isSecured")
-                    .and_then(|f| f.as_bool())
-                    .unwrap_or(false);
-                if let Some(tf) = type_filter
-                    && !typ.to_lowercase().contains(&tf.to_lowercase())
-                {
-                    continue;
-                }
-                if let Some(rf) = room_filter
-                    && !room
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&rf.to_lowercase())
-                {
-                    continue;
-                }
-                if let Some(cf) = cat_filter
-                    && !cat
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&cf.to_lowercase())
-                {
-                    continue;
-                }
-                if favorites_only && !is_favorite {
-                    continue;
-                }
-                controls.push(Control {
-                    name,
-                    uuid: uuid.clone(),
-                    typ,
-                    room,
-                    cat,
-                    is_favorite,
-                    is_secured,
-                });
-            }
-        }
-        controls.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(controls)
+        // Keep the shared cache/raw JSON contract in the CLI; Core owns only
+        // the typed projection of this already-acquired snapshot.
+        let catalog = ControlCatalog::from_loxapp3_json(&serde_json::to_vec(structure)?)?;
+        Ok(catalog.select(&ControlFilter {
+            typ: type_filter.map(str::to_owned),
+            room: room_filter.map(str::to_owned),
+            category: cat_filter.map(str::to_owned),
+            favorites_only,
+        }))
     }
 
     pub fn list_categories(&mut self) -> Result<Vec<(String, String)>> {
         let structure = self.get_structure()?;
-        let mut result = Vec::new();
-        if let Some(map) = structure.get("cats").and_then(|c| c.as_object()) {
-            for (uuid, cat) in map {
-                if let Some(name) = cat.get("name").and_then(|n| n.as_str()) {
-                    result.push((uuid.clone(), name.to_string()));
-                }
-            }
-        }
-        result.sort_by(|a, b| a.1.cmp(&b.1));
-        Ok(result)
+        let metadata = StructureMetadata::from_loxapp3_json(&serde_json::to_vec(structure)?)?;
+        Ok(metadata
+            .categories()
+            .iter()
+            .map(|category| (category.uuid.clone(), category.name.clone()))
+            .collect())
     }
 
     pub fn resolve(&mut self, name_or_uuid: &str) -> Result<String> {
@@ -521,45 +422,16 @@ impl LoxClient {
         name_or_uuid: &str,
         room_filter: Option<&str>,
     ) -> Result<String> {
-        if is_uuid(name_or_uuid) {
-            return Ok(name_or_uuid.to_string());
-        }
-        if let Some(uuid) = self.cfg.aliases.get(name_or_uuid) {
-            return Ok(uuid.clone());
-        }
-        let (name_part, room_part) = if let Some(idx) = name_or_uuid.rfind('[') {
-            if name_or_uuid.ends_with(']') {
-                let name = name_or_uuid[..idx].trim();
-                let room = &name_or_uuid[idx + 1..name_or_uuid.len() - 1];
-                (name, Some(room))
-            } else {
-                (name_or_uuid, None)
-            }
-        } else {
-            (name_or_uuid, None)
+        let query = match ControlQuery::prepare(name_or_uuid, room_filter, &self.cfg.aliases) {
+            PreparedControlQuery::Resolved(control) => return Ok(control.uuid),
+            PreparedControlQuery::Catalog(query) => query,
         };
-        let effective_room = room_part.or(room_filter);
         let controls = self.list_controls(None, None)?;
-        let matches: Vec<&Control> = controls
-            .iter()
-            .filter(|c| c.name.to_lowercase().contains(&name_part.to_lowercase()))
-            .filter(|c| {
-                if let Some(rf) = effective_room {
-                    c.room
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&rf.to_lowercase())
-                } else {
-                    true
-                }
-            })
-            .collect();
-        match matches.len() {
-            0 => bail!("No control matching '{}'", name_or_uuid),
-            1 => Ok(matches[0].uuid.clone()),
-            _ => {
-                for c in &matches {
+        match query.resolve(&controls) {
+            Ok(control) => Ok(control.uuid),
+            Err(ResolutionError::NotFound { query }) => bail!("No control matching '{}'", query),
+            Err(ResolutionError::Ambiguous { query, candidates }) => {
+                for c in &candidates {
                     eprintln!(
                         "  {:40} [{}]  {}",
                         c.name,
@@ -569,7 +441,7 @@ impl LoxClient {
                 }
                 bail!(
                     "Ambiguous: '{}'. Use [Room] qualifier or --room flag.",
-                    name_or_uuid
+                    query
                 )
             }
         }
@@ -586,87 +458,42 @@ impl LoxClient {
 
     pub fn get_global_states(&mut self) -> Result<Vec<(String, String)>> {
         let structure = self.get_structure()?;
-        let mut result = Vec::new();
-        if let Some(map) = structure.get("globalStates").and_then(|g| g.as_object()) {
-            for (name, uuid_val) in map {
-                if let Some(uuid) = uuid_val.as_str() {
-                    result.push((name.clone(), uuid.to_string()));
-                }
-            }
-        }
-        result.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(result)
+        let metadata = StructureMetadata::from_loxapp3_json(&serde_json::to_vec(structure)?)?;
+        Ok(metadata
+            .global_states()
+            .iter()
+            .map(|state| (state.name.clone(), state.uuid.clone()))
+            .collect())
     }
 
     pub fn get_operating_modes(&mut self) -> Result<Vec<(String, String)>> {
         let structure = self.get_structure()?;
-        let mut result = Vec::new();
-        if let Some(map) = structure.get("operatingModes").and_then(|o| o.as_object()) {
-            for (id, name_val) in map {
-                if let Some(name) = name_val.as_str() {
-                    result.push((id.clone(), name.to_string()));
-                }
-            }
-        }
-        result.sort_by(|a, b| {
-            a.0.parse::<i32>()
-                .unwrap_or(0)
-                .cmp(&b.0.parse::<i32>().unwrap_or(0))
-        });
-        Ok(result)
+        let metadata = StructureMetadata::from_loxapp3_json(&serde_json::to_vec(structure)?)?;
+        Ok(metadata
+            .operating_modes()
+            .iter()
+            .map(|mode| (mode.raw_id.clone(), mode.name.clone()))
+            .collect())
     }
 
     pub fn list_autopilot_rules(&mut self) -> Result<Vec<AutopilotRule>> {
         let structure = self.get_structure()?;
-        let mut rules = Vec::new();
-        if let Some(map) = structure.get("autopilot").and_then(|a| a.as_object()) {
-            for (uuid, entry) in map {
-                let name = entry
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("?")
-                    .to_string();
-                let state_changed = entry
-                    .get("states")
-                    .and_then(|s| s.get("changed"))
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let state_history = entry
-                    .get("states")
-                    .and_then(|s| s.get("history"))
-                    .and_then(|h| h.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                rules.push(AutopilotRule {
-                    name,
-                    uuid: uuid.clone(),
-                    state_changed,
-                    state_history,
-                });
-            }
-        }
-        rules.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(rules)
+        let catalog = AutopilotCatalog::from_loxapp3_json(&serde_json::to_vec(structure)?)?;
+        Ok(catalog.into_rules())
     }
 
     pub fn find_autopilot_rule(&mut self, name_or_uuid: &str) -> Result<AutopilotRule> {
         let rules = self.list_autopilot_rules()?;
-        if is_uuid(name_or_uuid) {
-            return rules
-                .into_iter()
-                .find(|r| r.uuid == name_or_uuid)
-                .context("Autopilot rule UUID not found");
-        }
-        let matches: Vec<AutopilotRule> = rules
-            .into_iter()
-            .filter(|r| r.name.to_lowercase().contains(&name_or_uuid.to_lowercase()))
-            .collect();
-        match matches.len() {
-            0 => bail!("No autopilot rule matching '{}'", name_or_uuid),
-            1 => Ok(matches.into_iter().next().unwrap()),
-            _ => {
-                for r in &matches {
+        match resolve_rule(&rules, name_or_uuid) {
+            Ok(rule) => Ok(rule.clone()),
+            Err(RuleResolutionError::UuidNotFound) => {
+                None::<AutopilotRule>.context("Autopilot rule UUID not found")
+            }
+            Err(RuleResolutionError::NotFound) => {
+                bail!("No autopilot rule matching '{}'", name_or_uuid)
+            }
+            Err(RuleResolutionError::Ambiguous { candidates }) => {
+                for r in candidates {
                     eprintln!("  {}", r.name);
                 }
                 bail!("Ambiguous: '{}'", name_or_uuid)
@@ -697,7 +524,7 @@ impl LoxClient {
         }
         let matches: Vec<Control> = controls
             .into_iter()
-            .filter(|c| c.name.to_lowercase().contains(&name_or_uuid.to_lowercase()))
+            .filter(|c| matches_text(&c.name, name_or_uuid))
             .collect();
         match matches.len() {
             0 => bail!("No control matching '{}'", name_or_uuid),
@@ -712,23 +539,15 @@ impl LoxClient {
     }
 }
 
-pub fn is_uuid(s: &str) -> bool {
-    s.len() > 20 && s.contains('-') && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-}
-
 /// Validate that a UUID is safe to embed in a URL path.
 /// Rejects path traversal attempts and non-hex characters.
 pub fn validate_uuid(uuid: &str) -> Result<()> {
-    if uuid.is_empty() || uuid.len() > 50 {
-        bail!("Invalid UUID length: '{}'", uuid);
+    match lox_core::control::validate_uuid(uuid) {
+        Ok(()) => Ok(()),
+        Err(IdentifierError::InvalidLength) => bail!("Invalid UUID length: '{}'", uuid),
+        Err(IdentifierError::InvalidCharacters) => bail!("Invalid characters in UUID: '{}'", uuid),
+        Err(IdentifierError::NonHex) => bail!("UUID contains non-hex characters: '{}'", uuid),
     }
-    if uuid.contains("..") || uuid.contains('/') || uuid.contains('\\') || uuid.contains('%') {
-        bail!("Invalid characters in UUID: '{}'", uuid);
-    }
-    if !uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        bail!("UUID contains non-hex characters: '{}'", uuid);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -746,7 +565,502 @@ mod tests {
         }
     }
 
+    #[test]
+    fn autopilot_selector_cached_characterization() {
+        let server = MockServer::start();
+        let unexpected = server.mock(|when, then| {
+            when.any_request();
+            then.status(500);
+        });
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        client.structure = Some(serde_json::json!({"autopilot": {
+            "abcdef01-2345-6789-abcdef0123456789": {"name":"Native","states":{"changed":"raw/\0","history":"<H>" }},
+            "abcdef01-2345-6789-abcd-ef0123456789": {"name":"RFC"},
+            "---------------------": {"name":"Loose"},
+            "empty": {"name":""},
+            "exact": {"name":"Kitchen"},
+            "contains": {"name":"Kitchen Extra"},
+            "unicode": {"name":"Ünicode İ Σ Straße é"},
+            "placeholder": false
+        }}));
+        for (query, expected) in [
+            ("abcdef01-2345-6789-abcdef0123456789", "Native"),
+            ("abcdef01-2345-6789-abcd-ef0123456789", "RFC"),
+            ("---------------------", "Loose"),
+            ("üni", "Ünicode İ Σ Straße é"),
+            ("i\u{307}", "Ünicode İ Σ Straße é"),
+            ("?", "?"),
+        ] {
+            assert_eq!(client.find_autopilot_rule(query).unwrap().name, expected);
+        }
+        let native = client.find_autopilot_rule("Native").unwrap();
+        assert_eq!(native.state_changed, "raw/\0");
+        assert_eq!(native.state_history, "<H>");
+        for (query, message, category) in [
+            ("Kitchen", "Ambiguous: 'Kitchen'", "ambiguous_control"),
+            ("", "Ambiguous: ''", "ambiguous_control"),
+            ("missing", "No autopilot rule matching 'missing'", "error"),
+            (" Kitchen", "No autopilot rule matching ' Kitchen'", "error"),
+            (
+                "Kitchen [Room]",
+                "No autopilot rule matching 'Kitchen [Room]'",
+                "error",
+            ),
+            ("STRASSE", "No autopilot rule matching 'STRASSE'", "error"),
+            ("e\u{301}", "No autopilot rule matching 'e\u{301}'", "error"),
+            ("Ａ", "No autopilot rule matching 'Ａ'", "error"),
+            (
+                "ABCDEF01-2345-6789-ABCDEF0123456789",
+                "Autopilot rule UUID not found",
+                "error",
+            ),
+        ] {
+            let error = client.find_autopilot_rule(query).unwrap_err();
+            assert_eq!(error.to_string(), message);
+            assert_eq!(format!("{error:#}"), message);
+            assert_eq!(error.root_cause().to_string(), message);
+            assert_eq!(error.chain().count(), 1);
+            assert_eq!(crate::categorize_error(&error), category);
+        }
+        client.structure = Some(serde_json::json!({"autopilot":{"only":{"name":""}}}));
+        assert_eq!(client.find_autopilot_rule("").unwrap().uuid, "only");
+        unexpected.assert_hits(0);
+    }
+
+    #[test]
+    fn autopilot_selector_diagnostic_child() {
+        let Ok(query) = std::env::var("LOX_TEST_AUTOPILOT_QUERY") else {
+            return;
+        };
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        client.structure = Some(serde_json::json!({"autopilot":{
+            "z":{"name":"Same"},
+            "b":{"name":"Same Extra"},
+            "a":{"name":"Same"}
+        }}));
+        let error = client.find_autopilot_rule(&query).unwrap_err();
+        let message = format!("{error:#}");
+        assert_eq!(message, error.to_string());
+        assert_eq!(error.chain().count(), 1);
+        assert_eq!(error.root_cause().to_string(), message);
+        println!("SIMPLE={error}");
+        println!("RICH={message}");
+        println!(
+            "ENVELOPE={}",
+            crate::errors::error_envelope(crate::categorize_error(&error), &message)
+        );
+    }
+
+    #[test]
+    fn autopilot_selector_diagnostics_preserve_lines_and_categories() {
+        for (query, names, message, category) in [
+            (
+                "Same",
+                "  Same\n  Same\n  Same Extra\n",
+                "Ambiguous: 'Same'",
+                "ambiguous_control",
+            ),
+            (
+                "missing",
+                "",
+                "No autopilot rule matching 'missing'",
+                "error",
+            ),
+            (
+                "---------------------",
+                "",
+                "Autopilot rule UUID not found",
+                "error",
+            ),
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "client::tests::autopilot_selector_diagnostic_child",
+                    "--nocapture",
+                ])
+                .env("LOX_TEST_AUTOPILOT_QUERY", query)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .replace("\r\n", "\n"),
+                names
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(stdout.contains(&format!("SIMPLE={message}")), "{stdout}");
+            assert!(stdout.contains(&format!("RICH={message}")), "{stdout}");
+            let envelope = stdout
+                .lines()
+                .find_map(|line| line.strip_prefix("ENVELOPE="))
+                .unwrap();
+            let envelope: Value = serde_json::from_str(envelope).unwrap();
+            assert_eq!(envelope["error"], category);
+            assert_eq!(envelope["message"], message);
+        }
+    }
+
+    #[test]
+    fn autopilot_catalog_cached_permissive_shapes() {
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        for root in ["null", "true", "1", "\"x\"", "[]", "{}"] {
+            client.structure = Some(serde_json::from_str(root).unwrap());
+            assert!(client.list_autopilot_rules().unwrap().is_empty());
+        }
+        for value in serde_json::json!([null, false, 1, "", [], {}])
+            .as_array()
+            .unwrap()
+        {
+            client.structure = Some(serde_json::json!({"autopilot": value}));
+            assert!(client.list_autopilot_rules().unwrap().is_empty());
+            client.structure = Some(serde_json::json!({"autopilot": {
+                "scalar": value,
+                "fields": {"name": value, "states": {"changed": value, "history": value}},
+                "states": {"states": value}
+            }}));
+            let rules = client.list_autopilot_rules().unwrap();
+            assert_eq!(rules.len(), 3);
+            let fields = rules.iter().find(|r| r.uuid == "fields").unwrap();
+            assert_eq!(fields.name, value.as_str().unwrap_or("?"));
+            assert_eq!(fields.state_changed, value.as_str().unwrap_or(""));
+            assert_eq!(fields.state_history, value.as_str().unwrap_or(""));
+            for rule in rules.iter().filter(|r| r.uuid != "fields") {
+                assert_eq!(rule.name, "?");
+                assert_eq!(rule.state_changed, "");
+                assert_eq!(rule.state_history, "");
+            }
+        }
+    }
+
+    #[test]
+    fn autopilot_catalog_cached_raw_ownership_sort_and_stable_ties() {
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        let structure: Value = serde_json::from_str(
+            r#"{"autopilot":{
+                "tie-z":{"name":"Same"},
+                "tie-a":{"name":"Same"},
+                "raw/\u0000e\u0301":{"name":"<C>Ü\u0000e\u0301","states":{"changed":"Changed/\u0000","history":"<History>"}},
+                "lower":{"name":"a","states":{"changed":"only"}},
+                "upper":{"name":"A","states":{"history":"only"}},
+                "empty":{"name":""},
+                "scalar":null
+            }}"#,
+        )
+        .unwrap();
+        let expected_ties: Vec<String> = structure["autopilot"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, entry)| entry["name"] == "Same")
+            .map(|(id, _)| id.clone())
+            .collect();
+        client.structure = Some(structure);
+        let mut rules = client.list_autopilot_rules().unwrap();
+        assert_eq!(
+            rules.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["", "<C>Ü\0e\u{301}", "?", "A", "Same", "Same", "a"]
+        );
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|r| r.name == "Same")
+                .map(|r| r.uuid.clone())
+                .collect::<Vec<_>>(),
+            expected_ties
+        );
+        let raw = &rules[1];
+        assert_eq!(raw.uuid, "raw/\0e\u{301}");
+        assert_eq!(raw.state_changed, "Changed/\0");
+        assert_eq!(raw.state_history, "<History>");
+        assert_eq!(rules[3].state_changed, "");
+        assert_eq!(rules[3].state_history, "only");
+        assert_eq!(rules[6].state_changed, "only");
+        assert_eq!(rules[6].state_history, "");
+        rules[1].name.clear();
+        assert_eq!(
+            client.list_autopilot_rules().unwrap()[1].name,
+            "<C>Ü\0e\u{301}"
+        );
+        client.structure = Some(Value::Null);
+        assert_eq!(rules[1].state_history, "<History>");
+    }
+
     // ── list_controls ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn metadata_permissive_shapes() {
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(false),
+            serde_json::json!(42),
+            serde_json::json!("text"),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            for root in [
+                value.clone(),
+                serde_json::json!({
+                    "cats": value, "globalStates": value, "operatingModes": value
+                }),
+            ] {
+                client.structure = Some(root);
+                assert!(client.list_categories().unwrap().is_empty());
+                assert!(client.get_global_states().unwrap().is_empty());
+                assert!(client.get_operating_modes().unwrap().is_empty());
+            }
+        }
+        client.structure = Some(serde_json::json!({
+            "cats": {
+                "null": null, "bool": true, "number": 7, "array": [],
+                "string": "ignored", "missing": {}, "wrong": {"name": 7},
+                "../ raw uuid ": {"name": "", "extra": true}
+            },
+            "globalStates": {
+                "null": null, "bool": true, "number": 7, "array": [], "object": {},
+                "": "", " raw name ": "../ raw uuid "
+            },
+            "operatingModes": {
+                "null": null, "bool": true, "number": 7, "array": [], "object": {},
+                "": ""
+            }
+        }));
+        assert_eq!(
+            serde_json::to_value(client.list_categories().unwrap()).unwrap(),
+            serde_json::json!([["../ raw uuid ", ""]])
+        );
+        assert_eq!(
+            serde_json::to_value(client.get_global_states().unwrap()).unwrap(),
+            serde_json::json!([["", ""], [" raw name ", "../ raw uuid "]])
+        );
+        assert_eq!(
+            serde_json::to_value(client.get_operating_modes().unwrap()).unwrap(),
+            serde_json::json!([["", ""]])
+        );
+    }
+
+    #[test]
+    fn metadata_case_unicode_and_stable_category_ties() {
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        let root = serde_json::json!({
+            "cats": {
+                "z": {"name": "same"}, "A": {"name": "same"},
+                "upper": {"name": "Z"}, "lower": {"name": "a"},
+                "unicode": {"name": "Ä"}
+            },
+            "globalStates": {"ä": "z", "z": "A", "A": "ä", "": "raw"}
+        });
+        let ties: Vec<_> = root["cats"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|key| matches!(key.as_str(), "A" | "z"))
+            .cloned()
+            .collect();
+        client.structure = Some(root);
+        let cats = client.list_categories().unwrap();
+        assert_eq!(
+            cats.iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["Z", "a", "same", "same", "Ä"]
+        );
+        assert_eq!(
+            cats[2..4]
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>(),
+            ties
+        );
+        assert_eq!(
+            serde_json::to_value(client.get_global_states().unwrap()).unwrap(),
+            serde_json::json!([["", "raw"], ["A", "ä"], ["z", "A"], ["ä", "z"]])
+        );
+    }
+
+    #[test]
+    fn metadata_mode_raw_ids_and_stable_zero_ties() {
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        let root = serde_json::json!({"operatingModes": {
+            "10": "ten", "-2": "negative", "2": "two", "+1": "plus one",
+            "": "", " 0": "space", "+0": "plus zero", "-0": "minus zero",
+            "00": "leading zero", "invalid": "invalid",
+            "2147483648": "overflow", "-2147483649": "underflow"
+        }});
+        let zero_ids: Vec<_> = root["operatingModes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|key| !matches!(key.as_str(), "10" | "-2" | "2" | "+1"))
+            .cloned()
+            .collect();
+        client.structure = Some(root);
+        let modes = client.get_operating_modes().unwrap();
+        assert_eq!(modes.first().unwrap(), &("-2".into(), "negative".into()));
+        assert_eq!(
+            modes[1..1 + zero_ids.len()]
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>(),
+            zero_ids
+        );
+        assert_eq!(
+            serde_json::to_value(&modes[1 + zero_ids.len()..]).unwrap(),
+            serde_json::json!([["+1", "plus one"], ["2", "two"], ["10", "ten"]])
+        );
+    }
+
+    #[test]
+    fn catalog_permissive_shapes_and_empty_id_lookup() {
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        for root in [
+            serde_json::json!(null),
+            serde_json::json!(false),
+            serde_json::json!(42),
+            serde_json::json!("text"),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            client.structure = Some(root);
+            assert!(client.list_controls(None, None).unwrap().is_empty());
+        }
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!(42),
+            serde_json::json!("text"),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            client.structure = Some(serde_json::json!({"controls": value}));
+            assert!(client.list_controls(None, None).unwrap().is_empty());
+            client.structure = Some(serde_json::json!({
+                "rooms": {"": {"name": "Empty room"}},
+                "cats": {"": {"name": "Empty category"}},
+                "controls": {"../ raw key ": {
+                    "name": value, "type": value, "room": value, "cat": value,
+                    "isFavorite": value, "isSecured": value
+                }, "scalar": value}
+            }));
+            let controls = client.list_controls(None, None).unwrap();
+            let offline = ControlCatalog::from_loxapp3_json(
+                &serde_json::to_vec(client.structure.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(offline.controls(), controls);
+            let raw = controls.iter().find(|c| c.uuid == "../ raw key ").unwrap();
+            assert_eq!(raw.name, value.as_str().unwrap_or("?"));
+            assert_eq!(raw.typ, value.as_str().unwrap_or("?"));
+            let empty_ref = value.as_str().is_none();
+            assert_eq!(raw.room.as_deref(), empty_ref.then_some("Empty room"));
+            assert_eq!(raw.cat.as_deref(), empty_ref.then_some("Empty category"));
+            assert_eq!(raw.is_favorite, value.as_bool().unwrap_or(false));
+            assert_eq!(raw.is_secured, value.as_bool().unwrap_or(false));
+            assert_eq!(
+                controls.iter().find(|c| c.uuid == "scalar").unwrap().name,
+                "?"
+            );
+        }
+        for maps in [
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!(true),
+            serde_json::json!("x"),
+            serde_json::json!(7),
+        ] {
+            client.structure = Some(serde_json::json!({
+                "rooms": maps, "cats": maps, "controls": {"": {}}
+            }));
+            let controls = client
+                .list_controls_ext(None, Some(""), Some(""), false)
+                .unwrap();
+            assert_eq!(controls.len(), 1);
+            assert_eq!(controls[0].uuid, "");
+            assert_eq!(controls[0].room, None);
+            assert_eq!(controls[0].cat, None);
+        }
+    }
+
+    #[test]
+    fn catalog_loopback_projection_filters_sort_and_cache() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/data/LoxApp3.json");
+            then.json_body(serde_json::json!({
+                "rooms": {"r": {"name": "KÜCHE"}, "bad": {"name": 1}},
+                "cats": {"c": {"name": "LÜFTUNG"}, "bad": {"name": false}},
+                "controls": {
+                    "raw / key": {"name": "z", "type": "Straße", "room": "r", "cat": "c", "isFavorite": true, "isSecured": true,
+                        "subControls": {"nested": {"name": "Must not appear"}}},
+                    "a": {"name": "a", "type": "Switch", "room": "missing", "isFavorite": "true"},
+                    "tie2": {"name": "A", "room": "bad", "cat": "bad", "isFavorite": 1},
+                    "tie1": {"name": "A", "isFavorite": false},
+                    "bad": {"name": null, "type": [], "isFavorite": null}
+                }
+            }));
+        });
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        let controls = client.list_controls(None, None).unwrap();
+        assert_eq!(
+            controls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["?", "A", "A", "a", "z"]
+        );
+        let mut ties = controls
+            .iter()
+            .filter(|c| c.name == "A")
+            .map(|c| c.uuid.as_str())
+            .collect::<Vec<_>>();
+        ties.sort();
+        assert_eq!(ties, ["tie1", "tie2"]);
+        let selected = client
+            .list_controls_ext(Some("STRAß"), Some("kü"), Some("lüft"), true)
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].uuid, "raw / key");
+        assert!(selected[0].is_secured);
+        assert!(
+            client
+                .list_controls(Some("STRASSE"), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            client
+                .list_controls(Some(" Straße "), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            client
+                .list_controls_ext(None, Some(""), Some(""), false)
+                .unwrap(),
+            controls
+        );
+        assert!(
+            client
+                .list_controls(None, Some("unknown"))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            client.list_controls_ext(None, None, None, true).unwrap(),
+            selected
+        );
+        assert_eq!(
+            client.list_controls(Some("?"), None).unwrap()[0].uuid,
+            "bad"
+        );
+        mock.assert_hits(1);
+    }
 
     #[test]
     fn test_list_controls_parses_structure() {
@@ -851,6 +1165,78 @@ mod tests {
     }
 
     // ── resolve_with_room ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_priority_bypasses_structure() {
+        let server = MockServer::start();
+        let structure = server.mock(|when, then| {
+            when.method(GET).path("/data/LoxApp3.json");
+            then.status(500);
+        });
+        let mut cfg = mock_config(&server);
+        let native = "1fbc668c-005c-7471-ffffed57184a04d2";
+        let rfc = "1fbc668c-005c-7471-ffff-ed57184a04d2";
+        let permissive = "---------------------";
+        for id in [native, rfc, permissive] {
+            cfg.aliases.insert(id.into(), "must-not-win".into());
+        }
+        cfg.aliases
+            .insert("Light [Room]".into(), "../opaque".into());
+        let mut client = LoxClient::new(cfg).unwrap();
+        for id in [native, rfc, permissive] {
+            assert_eq!(client.resolve_with_room(id, Some("ignored")).unwrap(), id);
+        }
+        assert_eq!(
+            client
+                .resolve_with_room("Light [Room]", Some("ignored"))
+                .unwrap(),
+            "../opaque"
+        );
+        assert!(client.structure.is_none());
+        structure.assert_hits(0);
+    }
+
+    #[test]
+    fn test_resolve_substring_empty_and_literal_room_semantics() {
+        let server = MockServer::start();
+        let mut client = LoxClient::new(mock_config(&server)).unwrap();
+        client.structure = Some(serde_json::json!({
+            "rooms": { "r1": { "name": "KÜCHE" }, "r2": { "name": " Küche " } },
+            "controls": {
+                "u1": { "name": "Licht", "room": "r1" },
+                "u2": { "name": "Licht Extra", "room": "r2" },
+                "u3": { "name": "Other" },
+                "u4": { "name": "Panel [West]", "room": "r1" }
+            }
+        }));
+        client
+            .cfg
+            .aliases
+            .insert("LICHT".into(), "alias-only".into());
+        assert_eq!(client.resolve("LICHT").unwrap(), "alias-only");
+        assert_eq!(
+            client.resolve("Licht").unwrap_err().to_string(),
+            "Ambiguous: 'Licht'. Use [Room] qualifier or --room flag."
+        );
+        assert_eq!(
+            client
+                .resolve_with_room(" Licht [ küche ]", Some("missing"))
+                .unwrap(),
+            "u2"
+        );
+        assert_eq!(client.resolve("Panel [West] [küche]").unwrap(), "u4");
+        assert_eq!(client.resolve_with_room("", Some(" küche ")).unwrap(), "u2");
+        assert_eq!(
+            client
+                .resolve_with_room("Other []", Some("missing"))
+                .unwrap(),
+            "u3"
+        );
+        assert_eq!(
+            client.resolve(" Licht ").unwrap_err().to_string(),
+            "No control matching ' Licht '"
+        );
+    }
 
     #[test]
     fn test_resolve_exact_match() {
@@ -1133,6 +1519,35 @@ mod tests {
     }
 
     // ── retry logic ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn retry_dispatches_four_attempts_for_real_timeout_errors() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        let client = LoxClient::new(Config {
+            host: host.clone(),
+            ..Config::default()
+        })
+        .unwrap();
+        let transport = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(20))
+            .build()
+            .unwrap();
+        let attempts = std::cell::Cell::new(0);
+        let url = format!("{host}/jdev/sys/date");
+        let error = client
+            .request_with_retry(|| {
+                attempts.set(attempts.get() + 1);
+                let error = transport.get(&url).send().unwrap_err();
+                assert!(error.is_timeout());
+                Err::<(), _>(error.into())
+            })
+            .unwrap_err();
+        assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_timeout());
+        assert_eq!(attempts.get(), 4);
+        drop(listener);
+    }
 
     #[test]
     fn test_retry_on_server_error() {

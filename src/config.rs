@@ -57,7 +57,7 @@ pub struct Config {
     /// Path to a git repository for config version tracking (`lox config init`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_repo: Option<String>,
-    /// Opt-in anonymous usage telemetry (`lox telemetry enable`)
+    /// Anonymous usage telemetry (enabled by default; `lox telemetry disable` to opt out)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<bool>,
 
@@ -86,7 +86,7 @@ pub struct GlobalConfig {
     pub active_context: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub contexts: HashMap<String, ContextEntry>,
-    /// Opt-in anonymous usage telemetry (global, not per-context)
+    /// Anonymous usage telemetry (global, not per-context; enabled by default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<bool>,
 }
@@ -170,6 +170,36 @@ impl Config {
     /// Scenes directory for this config.
     pub fn scenes_dir(&self) -> PathBuf {
         self.data_dir.join("scenes")
+    }
+
+    /// Read telemetry preferences without requiring connection settings or an active context.
+    pub fn telemetry_preference() -> Result<Option<bool>> {
+        let path = std::env::var_os("LOX_CONFIG")
+            .map(PathBuf::from)
+            .or_else(|| {
+                if ctx_override().is_none() {
+                    find_local_lox_dir().map(|dir| dir.join("config.yaml"))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(Self::path);
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Cannot read telemetry preference at {}", path.display())
+                });
+            }
+        };
+        #[derive(Deserialize)]
+        struct Preferences {
+            telemetry: Option<bool>,
+        }
+        let preferences: Preferences = serde_yaml::from_str(&content)
+            .with_context(|| format!("Cannot parse telemetry preference at {}", path.display()))?;
+        Ok(preferences.telemetry)
     }
 
     /// Load the effective config, considering context resolution:
@@ -371,13 +401,24 @@ pub fn find_local_lox_dir() -> Option<PathBuf> {
 /// Walk up from the given directory looking for a `.lox/config.yaml` file.
 /// Returns the `.lox/` directory path if found, or None.
 pub fn find_local_lox_dir_from(start: &Path) -> Option<PathBuf> {
-    let global_dir = Config::dir();
+    find_local_lox_dir_excluding(start, &Config::dir())
+}
+
+fn find_local_lox_dir_excluding(start: &Path, global_dir: &Path) -> Option<PathBuf> {
+    let resolved_global = global_dir.canonicalize().ok();
     let mut dir = start;
     loop {
         let candidate = dir.join(".lox");
-        // Don't match the global ~/.lox/ directory
-        if candidate != global_dir && candidate.join("config.yaml").is_file() {
-            return Some(candidate);
+        if candidate.join("config.yaml").is_file() {
+            let is_global = candidate == global_dir
+                || resolved_global.as_ref().is_some_and(|global| {
+                    candidate
+                        .canonicalize()
+                        .is_ok_and(|resolved| resolved == *global)
+                });
+            if !is_global {
+                return Some(candidate);
+            }
         }
         dir = dir.parent()?;
     }
@@ -568,6 +609,75 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         let found = find_local_lox_dir_from(&nested);
         assert_eq!(found, Some(lox_dir));
+    }
+
+    #[test]
+    fn find_local_lox_dir_excludes_global_path_aliases() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join(".lox");
+        let home = dir.path().join("home");
+        let global = home.join(".lox");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(home.join("child")).unwrap();
+        fs::write(project.join("config.yaml"), "host: project\n").unwrap();
+        fs::write(global.join("config.yaml"), "contexts: {}\n").unwrap();
+        let aliased_home = home.join("child").join("..");
+
+        for (start, excluded) in [
+            (aliased_home.clone(), global.clone()),
+            (home, aliased_home.join(".lox")),
+        ] {
+            assert_eq!(
+                find_local_lox_dir_excluding(&start, &excluded),
+                Some(project.clone()),
+                "start={start:?}, global={excluded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_local_lox_dir_keeps_nearest_project_path_form() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let global = home.join(".lox");
+        let project = home.join("project").join(".lox");
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(home.join("child")).unwrap();
+        fs::create_dir_all(home.join("project").join("deep")).unwrap();
+        fs::write(global.join("config.yaml"), "contexts: {}\n").unwrap();
+        fs::write(project.join("config.yaml"), "host: project\n").unwrap();
+        let aliased_project = home.join("child").join("..").join("project");
+
+        assert_eq!(
+            find_local_lox_dir_excluding(&aliased_project.join("deep"), &global),
+            Some(aliased_project.join(".lox"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_local_lox_dir_excludes_symlinked_global_directory() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join(".lox");
+        let home = dir.path().join("home");
+        let global = home.join(".lox");
+        let alias = dir.path().join("home-alias");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&global).unwrap();
+        fs::write(project.join("config.yaml"), "host: project\n").unwrap();
+        fs::write(global.join("config.yaml"), "contexts: {}\n").unwrap();
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+
+        assert_eq!(
+            find_local_lox_dir_excluding(&alias, &global),
+            Some(project.clone())
+        );
+        assert_eq!(
+            find_local_lox_dir_excluding(&home, &alias.join(".lox")),
+            Some(project)
+        );
     }
 
     #[test]

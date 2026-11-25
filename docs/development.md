@@ -96,8 +96,12 @@ An interrupted run terminates only its own command process family.
 The root package explicitly includes source, embedded schemas, runtime
 documentation, contract files, Rust integration tests, UX fixtures, licenses,
 and the eval cases read by `lox blocks`. Historical eval reports, golden
-exports, task databases, local reverse-engineering assets, CI files, and
-development scripts are not application package inputs. The simulator package
+exports (except the two fixtures embedded by the DayTimer and input-inversion
+integration tests), task databases, local reverse-engineering assets, CI files,
+and development scripts are not application package inputs. The two explicitly
+included golden fixtures are `Schedule-Based AC Control.Loxone` and
+`Guest Room Door.Loxone`; keep literal embedded test inputs in the package
+allowlist when adding integration tests. The simulator package
 includes its sources, tests/fixtures, and benchmark target.
 The CLI preserves its original sanitized `tests\eval\fixture.Loxone`.
 The simulator ships one byte-identical 52,165-byte copy as
@@ -112,18 +116,25 @@ also matches a nested `.beads/README.md`, which the actual archive check caught.
 Verify **actual archives**, not just `cargo package --list`:
 
 ```powershell
-$env:CARGO_TARGET_DIR = Join-Path (Get-Location) ".reverse-engineering\bench\target-package"
+$packageRun = [guid]::NewGuid().ToString("N")
+$env:CARGO_TARGET_DIR = Join-Path (Get-Location) ".reverse-engineering\bench\target-package-$packageRun"
 $env:CARGO_BUILD_JOBS = "8"
 cargo package --workspace --locked
-python scripts\verify-packages.py `
-  .reverse-engineering\bench\target-package\package\lox-cli-0.14.2.crate `
-  .reverse-engineering\bench\target-package\package\lox-sim-0.1.0.crate
+$archives = Get-ChildItem "$env:CARGO_TARGET_DIR\package\*.crate"
+python scripts\verify-packages.py @($archives.FullName)
 ```
 
 `--allow-dirty` may be added for a deliberate uncommitted manifest experiment;
 do not use it for a release. On the tested Cargo 1.99.1,
-`cargo package --workspace` orders `lox-sim` before `lox-cli` and stages the
-local simulator archive in a temporary Cargo registry to build the CLI archive.
+`cargo package --workspace` orders local dependencies (`lox-core` and
+`lox-sim`) before their dependents and stages their archives in a temporary
+Cargo registry to build the CLI and bindings archives.
+Use a fresh package target directory for every verification run when unpublished
+workspace contents can change without a version bump. Cargo's temporary registry
+identity depends on that path; reusing it can select stale same-version sources
+from the shared Cargo registry cache even after new archives have been staged.
+CI uses a revision/run/attempt-specific target outside the restored target cache.
+The third-party Cargo registry/git caches can remain shared; do not clear them.
 The normalized CLI manifest correctly keeps the versioned registry dependency;
 it does not ship a working dependency on the repository's `lox-sim` directory.
 CI builds these archives and checks their inventory for private assets and
@@ -134,17 +145,19 @@ CI additionally tests the simulator directly from its archive:
 
 ```powershell
 python scripts\test-simulator-package.py `
-  --package-dir .reverse-engineering\bench\target-package\package `
+  --package-dir "$env:CARGO_TARGET_DIR\package" `
   --work-dir .reverse-engineering\bench\standalone-simulator `
-  --target-dir .reverse-engineering\bench\target-standalone-simulator `
+  --target-dir "$env:CARGO_TARGET_DIR\package-tests" `
   --offline --jobs 8
 ```
 
 The script chooses the current simulator version from Cargo metadata (or accepts
 an explicit `--archive`), checks the archive, and runs ordinary `cargo test`
 followed by `cargo test --bench sim_bench` in Criterion's smoke-test mode. Source
-and target directories are keyed by the archive's SHA256. A one-package workspace
-boundary prevents the enclosing checkout from claiming the extracted crate;
+and target directories are keyed by the archive's SHA256.
+Keep `--work-dir` inside the checkout: the measurement helper records Git identity.
+A one-package workspace boundary prevents the enclosing checkout from claiming
+the extracted crate;
 it uses the archive's own lockfile and the standalone edition-2021 resolver.
 The crate is not modified and no parent fixtures are copied. Previously extracted source must remain
 byte-identical. Tests retain the archive's own lockfile; no companion package,

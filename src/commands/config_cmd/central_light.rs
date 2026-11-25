@@ -1,0 +1,162 @@
+use anyhow::{Result, bail};
+use clap::{Args, Subcommand, ValueEnum};
+use lox_core::configuration::editor::CentralLightLinkDirection;
+
+use crate::commands::RunContext;
+use crate::config_edit::ConfigEditor;
+
+#[derive(Args)]
+pub(crate) struct CentralLightTarget {
+    /// Local standalone .Loxone file
+    file: String,
+    /// CentralLight title, uuid:... or room-qualified selector
+    owner: String,
+    #[arg(short, long)]
+    room: Option<String>,
+}
+
+impl CentralLightTarget {
+    fn selector(&self) -> Result<String> {
+        match &self.room {
+            Some(_) if self.owner.ends_with(']') && self.owner.contains('[') => {
+                bail!("Use either a bracket room qualifier or --room, not both.")
+            }
+            Some(room) => Ok(format!("{} [{room}]", self.owner)),
+            None => Ok(self.owner.clone()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum DirectionArg {
+    Up,
+    Down,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum CentralLightCmd {
+    /// Show raw persisted linkC order, not native visible rows or controlled lights
+    Inspect {
+        #[command(flatten)]
+        target: CentralLightTarget,
+    },
+    /// Move one UUID up/down; all owner links must be proven direct-visible ModbusServer targets
+    MoveLink {
+        #[command(flatten)]
+        target: CentralLightTarget,
+        /// Linked control U from inspect, NOT its position or display name
+        uuid: String,
+        #[arg(value_enum)]
+        direction: DirectionArg,
+        #[arg(long, value_name = "PATH")]
+        save_as: Option<String>,
+    },
+    /// Remove one existing UUID and update its document-wide linked-reference marker
+    RemoveLink {
+        #[command(flatten)]
+        target: CentralLightTarget,
+        /// Linked control U from inspect, NOT its position or display name
+        uuid: String,
+        #[arg(long, value_name = "PATH")]
+        save_as: Option<String>,
+    },
+}
+
+pub(crate) fn run(ctx: &RunContext, action: CentralLightCmd) -> Result<()> {
+    let (target, edit, removal_uuid, save_as) = match action {
+        CentralLightCmd::Inspect { target } => (target, None, None, None),
+        CentralLightCmd::MoveLink {
+            target,
+            uuid,
+            direction,
+            save_as,
+        } => (target, Some((uuid, direction)), None, save_as),
+        CentralLightCmd::RemoveLink {
+            target,
+            uuid,
+            save_as,
+        } => (target, None, Some(uuid), save_as),
+    };
+    let selector = target.selector()?;
+    let original = std::fs::read(&target.file)?;
+    let mut editor = ConfigEditor::load(&original)?;
+    let moved = edit
+        .map(|(uuid, direction)| {
+            editor.move_central_light_link(
+                &selector,
+                &uuid,
+                match direction {
+                    DirectionArg::Up => CentralLightLinkDirection::Up,
+                    DirectionArg::Down => CentralLightLinkDirection::Down,
+                },
+            )
+        })
+        .transpose()?;
+    let removed = removal_uuid
+        .map(|uuid| editor.remove_central_light_link(&selector, &uuid))
+        .transpose()?;
+    let (movement, removal, inspection) = match (moved, removed) {
+        (Some((movement, inspection)), _) => (Some(movement), None, inspection),
+        (_, Some((removal, inspection))) => (None, Some(removal), inspection),
+        (None, None) => (None, None, editor.inspect_central_light_links(&selector)?),
+    };
+    let quiet = ctx.quiet || ctx.json || ctx.csv;
+    let changed = movement.as_ref().is_some_and(|movement| movement.changed) || removal.is_some();
+    let saved_to = if changed {
+        super::save_edited_with_quiet(&mut editor, &target.file, save_as.as_deref(), quiet)?;
+        Some(save_as.as_deref().unwrap_or(&target.file))
+    } else if movement.is_some() {
+        if let Some(output) = save_as.as_deref() {
+            super::write_edited_bytes(&original, &target.file, Some(output), quiet)?;
+            Some(output)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if ctx.json {
+        super::emit_json(
+            ctx,
+            serde_json::json!({
+                "ok": true,
+                "changed": changed,
+                "saved_to": saved_to,
+                "movement": movement,
+                "removal": removal,
+                "central_light": inspection,
+            }),
+        );
+    } else {
+        if !ctx.no_header {
+            println!(
+                "{}",
+                if ctx.csv {
+                    "POSITION,UUID,TYPE,TITLE"
+                } else {
+                    "POSITION  UUID                                 TYPE  TITLE"
+                }
+            );
+        }
+        for link in &inspection.links {
+            if ctx.csv {
+                println!(
+                    "{},\"{}\",\"{}\",\"{}\"",
+                    link.position,
+                    link.uuid,
+                    link.control_type.replace('"', "\"\""),
+                    link.title.replace('"', "\"\"")
+                );
+            } else {
+                println!(
+                    "{:<10}{:<37}{}  {}",
+                    link.position, link.uuid, link.control_type, link.title
+                );
+            }
+        }
+        if !ctx.csv && !ctx.quiet {
+            println!("\n{} linked functions", inspection.links.len());
+        }
+    }
+    Ok(())
+}

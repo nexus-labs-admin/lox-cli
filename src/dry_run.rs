@@ -9,7 +9,7 @@ use crate::commands::live_cmd::LiveCmd;
 use crate::commands::sim_cmd::SimCmd;
 use crate::commands::stats_cmd::StatsCmd;
 use crate::{
-    BlocksCmd, CacheCmd, Cli, Cmd, ConfigCmd, ControlCmd, CtxCmd, MqttConfigCmd, SetupCmd,
+    BlocksCmd, CacheCmd, Cli, Cmd, ConfigCmd, ControlCmd, CtxCmd, MqttConfigCmd, RoomCmd, SetupCmd,
     TelemetryCmd, TokenCmd,
 };
 
@@ -49,6 +49,14 @@ fn has_non_mutating_path(cmd: &Cmd) -> bool {
                 }
             } | ConfigCmd::Lighting {
                 action: LightingCmd::Inspect { .. }
+                    | LightingCmd::RecountMoods { .. }
+                    | LightingCmd::SetMoodCid { .. }
+                    | LightingCmd::SetMoodSid { .. }
+                    | LightingCmd::SetMoodMix { .. }
+                    | LightingCmd::SetMoodSkip { .. }
+                    | LightingCmd::RenameMood { .. }
+                    | LightingCmd::SetMoodDisplayName { .. }
+                    | LightingCmd::SetMoodLevel { .. }
             } | ConfigCmd::Ls
                 | ConfigCmd::Users { .. }
                 | ConfigCmd::Devices { .. }
@@ -63,6 +71,10 @@ fn has_non_mutating_path(cmd: &Cmd) -> bool {
                 | ConfigCmd::AutopilotList { .. }
                 | ConfigCmd::ModeList { .. }
                 | ConfigCmd::Moods { .. }
+                | ConfigCmd::SetMoodColor { .. }
+                | ConfigCmd::AddMood { .. }
+                | ConfigCmd::SpliceActor { .. }
+                | ConfigCmd::Room(RoomCmd::Add { .. } | RoomCmd::Rename { .. })
                 | ConfigCmd::GetParams { .. }
                 | ConfigCmd::Connectors { .. }
                 | ConfigCmd::GetProgram { .. }
@@ -74,7 +86,11 @@ fn has_non_mutating_path(cmd: &Cmd) -> bool {
                     open_issue: false,
                     ..
                 }
-                | ConfigCmd::Control(ControlCmd::Describe { .. } | ControlCmd::Wires { .. })
+                | ConfigCmd::Control(
+                    ControlCmd::Move { .. }
+                        | ControlCmd::Describe { .. }
+                        | ControlCmd::Wires { .. }
+                )
                 | ConfigCmd::Mqtt(MqttConfigCmd::List { .. } | MqttConfigCmd::Topics { .. })
         ),
         _ => matches!(
@@ -90,6 +106,10 @@ fn has_non_mutating_path(cmd: &Cmd) -> bool {
             } | Cmd::Ctx {
                 action: CtxCmd::List | CtxCmd::Current
             } | Cmd::Completions { install: false, .. }
+                | Cmd::Report(_)
+                | Cmd::Feedback {
+                    action: crate::commands::report_cmd::LegacyFeedbackCmd::Report(_)
+                }
                 | Cmd::Schema { .. }
                 | Cmd::Sim {
                     action: SimCmd::Check { .. }
@@ -194,7 +214,15 @@ mod tests {
             &["config", "init", "repo"],
             &["config", "pull"],
             &["config", "set-param", "input.Loxone", "block", "I1", "1"],
-            &["config", "room", "add", "input.Loxone", "new"],
+            &["config", "wire", "input.Loxone", "Lamp.AI", "uuid:source"],
+            &[
+                "config",
+                "wire-connector",
+                "input.Loxone",
+                "Lamp.AI",
+                "uuid:source",
+            ],
+            &["config", "control", "rename", "input.Loxone", "Lamp", "new"],
             &["config", "user-remove", "input.Loxone", "user"],
             &[
                 "config",
@@ -225,6 +253,26 @@ mod tests {
     #[test]
     fn dry_run_preserves_existing_planners_and_read_only_dispatch() {
         for args in [
+            vec!["config", "room", "add", "input.Loxone", "new"],
+            vec![
+                "config",
+                "control",
+                "move",
+                "input.Loxone",
+                "--to-room",
+                "new",
+                "--title",
+                "Lamp",
+            ],
+            vec!["config", "room", "rename", "input.Loxone", "old", "new"],
+            vec![
+                "config",
+                "splice-actor",
+                "input.Loxone",
+                "Lamp",
+                "--source",
+                "uuid:source",
+            ],
             vec![
                 "config",
                 "energy",
@@ -236,7 +284,121 @@ mod tests {
             ],
             vec!["stats", "download", "--dir", "stats", "--force"],
             vec!["config", "validate", "input.Loxone"],
+            vec![
+                "config",
+                "add-mood",
+                "input.Loxone",
+                "Lamp",
+                "--name",
+                "A",
+                "--color",
+                "hsv(0,100,100)",
+            ],
+            vec![
+                "config",
+                "set-mood-color",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--color",
+                "hsv(120,100,10)",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "set-mood-level",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--level",
+                "37",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "rename-mood",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--name",
+                "New",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "set-mood-display-name",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--name",
+                "New",
+                "--normalize-ascii",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "set-mood-display-name",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--clear",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "set-mood-cid",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--cid",
+                "22",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "set-mood-sid",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--sid",
+                "32",
+                "--allow-cid-clear",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "recount-moods",
+                "input.Loxone",
+                "Lamp",
+            ],
             vec!["config", "report", "input.Loxone"],
+            vec![
+                "config",
+                "lighting",
+                "set-mood-skip",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--skip",
+            ],
+            vec![
+                "config",
+                "lighting",
+                "set-mood-mix",
+                "input.Loxone",
+                "Lamp",
+                "--mood",
+                "A",
+                "--mix",
+            ],
             vec!["color", "encode", "--rgb", "1,2,3"],
             vec!["completions", "bash"],
         ] {

@@ -102,6 +102,19 @@ lox config devices file.Loxone --ports    # show all I/O ports with used/free st
 lox config diff old.Loxone new.Loxone     # compare two configs
 ```
 
+The default `config devices` table uses the shared Rust Core's optional
+`configuration-xml` legacy inventory. It lists exact Tree/Air/Network device
+types at any XML depth, retains raw entity spellings and encounter order within
+each displayed bus group, and applies one `--limit` budget across Tree, Air then
+Network. The total counts all inventoried devices.
+
+This is not the DOM physical-device identity inventory: JSON, `--summary` or any
+`--room` selects the existing DOM/editor discovery instead. `--ports` takes
+precedence and stays on the separate DOM port-listing path. These paths and the
+known `lox-n37w` loader quote/digit rewrite defect are unchanged. No file is
+rewritten by this read-only extraction. See the [Core device contract](../../crates/lox-core/README.md#optional-read-only-xml-device-inventory)
+for parser admission/defaulting limits; Python/JVM device inventory is unsupported.
+
 ### Describe & inspect
 
 ```bash
@@ -110,8 +123,22 @@ lox config describe file.Loxone --room "Küche"  # single room
 lox config rooms file.Loxone                    # list rooms with item counts
 lox config controls file.Loxone                 # list controls with type/room
 lox config controls file.Loxone -t WeatherData  # filter by type
+lox config controls file.Loxone --room Küche --limit 20
 lox config validate file.Loxone                 # check UUIDs, wiring, orphans
 ```
+
+`config controls` reads the XML file directly using the shared Rust Core's
+optional `configuration-xml` inventory. Type filtering is an ASCII-case-insensitive
+exact match; room filtering is a Unicode-lowercase substring match after name
+resolution. Results sort by type then title before the display limit (default
+100). Missing room/category definitions retain their raw IDs. Lowercase `.zip`
+paths must be extracted first.
+
+This read-only legacy inventory is not XML validation or the online control
+resolver: raw entity spellings are retained, and candidates use the next
+`IoData`, not necessarily a direct child. It does not use or repair the DOM
+editor's loader. See the [Core inventory contract](../../crates/lox-core/README.md#optional-read-only-xml-control-inventory)
+for admission and hierarchy limits.
 
 ### Add blocks & templates
 

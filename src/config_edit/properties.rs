@@ -1,7 +1,56 @@
-use super::{ConfigEditor, ConfigSurfaceEntry, ConnectorInfo, ElementDescription, PropertyValue};
+use super::{ConfigEditor, ConfigSurfaceEntry, ElementDescription};
 use anyhow::{Result, bail};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use lox_core::configuration::editor::ProgramTextError;
+use std::collections::{BTreeMap, BTreeSet};
 use xmltree::Element;
+
+#[cfg(test)]
+mod legacy_attribute_characterization {
+    use super::ConfigEditor;
+
+    #[test]
+    fn title_identity_raw_values_and_previous_option() {
+        let xml = br#"<ControlList><C Type="And" U="a" Title="Old" Empty=""/><C Type="And" U="a" Title="Mirror"/></ControlList>"#;
+        let mut editor = ConfigEditor::load(xml).unwrap();
+        assert_eq!(
+            editor.set_attribute("uuid:a", "Title", "New").unwrap(),
+            "Set Old.Title: Old → 'New'"
+        );
+        assert_eq!(
+            editor.set_attribute("uuid:a", "Empty", "").unwrap(),
+            "Set New.Empty:  → ''"
+        );
+        assert_eq!(
+            editor
+                .set_attribute("uuid:a", "Future", "<&\"\n室")
+                .unwrap(),
+            "Set New.Future: (none) → '<&\"\n室'"
+        );
+        let bytes = editor.to_bytes().unwrap();
+        let check = ConfigEditor::load(&bytes).unwrap();
+        let path = check.require_one("uuid:a").unwrap();
+        assert_eq!(check.get_element(&path).attributes["Future"], "<&\"\n室");
+        assert!(
+            String::from_utf8(bytes)
+                .unwrap()
+                .contains("Title=\"Mirror\"")
+        );
+    }
+
+    #[test]
+    fn selector_refusal_precedes_raw_attribute_mutation() {
+        let xml = br#"<ControlList><C U="a" Title="Gate"/><C U="b" Title="Gate"/></ControlList>"#;
+        let mut editor = ConfigEditor::load(xml).unwrap();
+        let before = editor.to_bytes().unwrap();
+        for selector in ["missing", "Gate"] {
+            let expected = editor.require_one(selector).unwrap_err();
+            let actual = editor.set_attribute(selector, "", "").unwrap_err();
+            assert_eq!(actual.to_string(), expected.to_string());
+            assert!(actual.downcast_ref::<String>().is_some());
+            assert_eq!(editor.to_bytes().unwrap(), before);
+        }
+    }
+}
 
 impl ConfigEditor {
     /// Set a property in an element's SET block.
@@ -65,123 +114,32 @@ impl ConfigEditor {
         attr_name: &str,
         value: &str,
     ) -> Result<String> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element_mut(&path);
-        let title = elem.attributes.get("Title").cloned().unwrap_or_default();
-        let old = elem
-            .attributes
-            .insert(attr_name.to_string(), value.to_string());
+        let change = self
+            .kernel
+            .set_attribute_legacy(selector, attr_name, value)
+            .map_err(super::editor_error)?;
         Ok(format!(
             "Set {}.{}: {} → '{}'",
-            title,
-            attr_name,
-            old.as_deref().unwrap_or("(none)"),
-            value
+            change.element.title,
+            change.attribute,
+            change.old_value.as_deref().unwrap_or("(none)"),
+            change.new_value
         ))
     }
 
     /// Set a parameter (Def value) on a connector of a block.
     pub fn set_param(&mut self, selector: &str, param: &str, value: &str) -> Result<()> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element_mut(&path);
-        for child in &mut elem.children {
-            if let Some(co) = child.as_mut_element()
-                && co.name == "Co"
-                && co.attributes.get("K").map(|k| k == param).unwrap_or(false)
-            {
-                co.attributes.insert("Def".to_string(), value.to_string());
-                return Ok(());
-            }
-        }
-        // No matching connector. Some "parameters" are element attributes rather
-        // than `<Co>` connectors — notably the analog range/behaviour of a
-        // `VirtualIn` (`MaxVal`/`MinVal`/`MinChange`/`MinTime`/`Step`). Allow
-        // `set-param <vi> MaxVal 1100` to target those so a too-low `MaxVal`
-        // (which silently clamps, e.g. a pressure VI reading 0) can be fixed
-        // without raw-XML edits.
-        const ATTR_PARAMS: &[&str] = &["MaxVal", "MinVal", "MinChange", "MinTime", "Step"];
-        if ATTR_PARAMS.contains(&param) {
-            elem.attributes.insert(param.to_string(), value.to_string());
-            return Ok(());
-        }
-        bail!(
-            "'{param}' is neither a connector nor a settable attribute on this block \
-             (attribute params: {})",
-            ATTR_PARAMS.join(", ")
-        )
+        self.kernel
+            .set_param_legacy(selector, param, value)
+            .map_err(super::editor_error)
     }
 
     /// Describe an element: type, title, UUID, properties, connectors, children.
     pub fn describe(&self, selector: &str) -> Result<ElementDescription> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element(path.as_slice());
-        self.describe_element(elem)
-    }
-
-    fn describe_element(&self, elem: &Element) -> Result<ElementDescription> {
-        let mut properties = HashMap::new();
-        let mut connectors = Vec::new();
-        let mut children = Vec::new();
-        let mut room = String::new();
-        let mut category = String::new();
-
-        for child in &elem.children {
-            if let Some(child_elem) = child.as_element() {
-                match child_elem.name.as_str() {
-                    "SET" => {
-                        for prop_node in &child_elem.children {
-                            if let Some(prop) = prop_node.as_element() {
-                                let val = prop.attributes.get("v").cloned().unwrap_or_default();
-                                let t = prop.attributes.get("t").cloned().unwrap_or_default();
-                                properties.insert(
-                                    prop.name.clone(),
-                                    PropertyValue {
-                                        value: val,
-                                        type_code: t,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    "Co" => {
-                        connectors.push(ConnectorInfo {
-                            kind: child_elem.attributes.get("K").cloned().unwrap_or_default(),
-                            target: child_elem.attributes.get("U").cloned().unwrap_or_default(),
-                        });
-                    }
-                    "IoData" => {
-                        room = child_elem.attributes.get("Pr").cloned().unwrap_or_default();
-                        category = child_elem.attributes.get("Cr").cloned().unwrap_or_default();
-                    }
-                    "C" => {
-                        let ct = child_elem
-                            .attributes
-                            .get("Type")
-                            .cloned()
-                            .unwrap_or_default();
-                        let ct_title = child_elem
-                            .attributes
-                            .get("Title")
-                            .cloned()
-                            .unwrap_or_default();
-                        children.push(format!("{}: {}", ct, ct_title));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(ElementDescription {
-            element_type: elem.attributes.get("Type").cloned().unwrap_or_default(),
-            title: elem.attributes.get("Title").cloned().unwrap_or_default(),
-            uuid: elem.attributes.get("U").cloned().unwrap_or_default(),
-            gid: elem.attributes.get("gid").cloned().unwrap_or_default(),
-            room_uuid: room,
-            category_uuid: category,
-            properties,
-            connectors,
-            children,
-        })
+        self.kernel
+            .describe_selected(selector)
+            .map(ElementDescription::from)
+            .map_err(super::editor_error)
     }
 
     /// Describe field names and nested storage without exposing configuration values.
@@ -260,47 +218,9 @@ impl ConfigEditor {
     /// Read the program text from a SequenceController block's
     /// `<Field Name="Configuration">` element.
     pub fn get_program_text(&self, selector: &str) -> Result<String> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element(&path);
-        let title = elem.attributes.get("Title").cloned().unwrap_or_default();
-        let block_type = elem.attributes.get("Type").cloned().unwrap_or_default();
-
-        if block_type != "SequenceController" {
-            bail!(
-                "'{}' is a {} — get-program is only for SequenceController blocks",
-                title,
-                block_type
-            );
-        }
-
-        // Look for <Field Name="Configuration">...</Field>
-        for child in &elem.children {
-            if let Some(field) = child.as_element()
-                && field.name == "Field"
-                && field
-                    .attributes
-                    .get("Name")
-                    .map(|n| n == "Configuration")
-                    .unwrap_or(false)
-            {
-                // Get text content
-                let text = field
-                    .children
-                    .iter()
-                    .filter_map(|c| {
-                        if let xmltree::XMLNode::Text(t) = c {
-                            Some(t.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-                return Ok(text);
-            }
-        }
-
-        Ok(String::new())
+        self.kernel
+            .program_text_selected(selector)
+            .map_err(program_text_error)
     }
 
     /// Write program text to a SequenceController block's
@@ -379,5 +299,12 @@ impl ConfigEditor {
             if seqs == 1 { "" } else { "s" },
             title,
         ))
+    }
+}
+
+pub(super) fn program_text_error(error: ProgramTextError) -> anyhow::Error {
+    match error {
+        ProgramTextError::Edit(error) => super::editor_error(error),
+        error @ ProgramTextError::Unsupported { .. } => anyhow::anyhow!("{error}"),
     }
 }

@@ -6,9 +6,10 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
-use quick_xml::Reader;
-use quick_xml::escape::unescape;
-use quick_xml::events::{BytesStart, Event};
+use lox_core::statistics::{
+    StatSeries, StatisticIdentity, StatisticResolutionError, StatisticsError, parse_series,
+    resolve_identity,
+};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -299,17 +300,6 @@ pub struct StatEntry {
     pub label: String,
 }
 
-/// The logged values of one statistic file (or several merged months).
-#[derive(Debug, Clone, PartialEq)]
-pub struct StatSeries {
-    pub name: String,
-    pub group: Option<u32>,
-    /// Output labels, from `Outputs="a,b"`
-    pub outputs: Vec<String>,
-    /// `(timestamp, values in output order)`
-    pub rows: Vec<(String, Vec<f64>)>,
-}
-
 /// Quote a CSV field when it contains a separator, quote or newline.
 fn csv_field(s: &str) -> String {
     if s.contains([',', '"', '\n', '\r']) {
@@ -335,7 +325,26 @@ fn fetch_series(lox: &LoxClient, entry: &StatEntry) -> Result<StatSeries> {
     let xml = lox
         .get_text(&format!("/stats/{}", entry.file))
         .with_context(|| format!("reading {}", entry.file))?;
-    parse_series(&xml).with_context(|| format!("parsing {}", entry.file))
+    parse_series(&xml)
+        .map_err(statistics_error)
+        .with_context(|| format!("parsing {}", entry.file))
+}
+
+fn statistics_error(error: StatisticsError) -> anyhow::Error {
+    let message = error.to_string();
+    match error {
+        StatisticsError::Xml { source } => anyhow::Error::new(source).context(message),
+        StatisticsError::MalformedAttribute { source, .. } => {
+            anyhow::Error::new(source).context(message)
+        }
+        StatisticsError::AttributeValue { source, .. } => source.into(),
+        StatisticsError::InvalidStatsGroup { source, .. }
+        | StatisticsError::InvalidNumOutputs { source, .. } => {
+            anyhow::Error::new(source).context(message)
+        }
+        StatisticsError::InvalidValue { source, .. } => anyhow::Error::new(source).context(message),
+        other => other.into(),
+    }
 }
 
 fn list(
@@ -415,50 +424,34 @@ fn list(
 
 /// Resolve a name or uuid to the index entries of exactly one statistic uuid.
 fn resolve<'a>(entries: &'a [StatEntry], query: &str) -> Result<Vec<&'a StatEntry>> {
-    let q = query.to_lowercase();
-    let mut matches: Vec<&StatEntry> = entries.iter().filter(|e| e.uuid == q).collect();
-    if matches.is_empty() {
-        matches = entries
-            .iter()
-            .filter(|e| e.name.to_lowercase() == q)
-            .collect();
-    }
-    if matches.is_empty() {
-        matches = entries
-            .iter()
-            .filter(|e| e.name.to_lowercase().contains(&q))
-            .collect();
-    }
-    if matches.is_empty() {
-        let mut names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
-        names.sort();
-        names.dedup();
-        return Err(crate::errors::not_found_error(
-            "Statistic",
-            query,
-            &names,
-            "lox stats ls",
-        ));
-    }
-    let uuids: HashSet<&str> = matches.iter().map(|e| e.uuid.as_str()).collect();
-    if uuids.len() > 1 {
-        let mut candidates: Vec<(&str, Option<u32>, &str)> = matches
-            .iter()
-            .map(|e| (e.name.as_str(), e.group, e.uuid.as_str()))
-            .collect();
-        candidates.sort();
-        candidates.dedup();
-        let lines: Vec<String> = candidates
-            .iter()
-            .map(|(name, group, uuid)| format!("  {name}  group {}  {uuid}", group_label(*group)))
-            .collect();
-        bail!(
-            "Ambiguous: '{query}' matches {} statistics; pass the uuid instead:\n{}",
-            uuids.len(),
-            lines.join("\n")
-        );
-    }
-    let uuid = matches[0].uuid.as_str();
+    let identities: Vec<_> = entries
+        .iter()
+        .map(|e| StatisticIdentity {
+            name: &e.name,
+            group: e.group,
+            uuid: &e.uuid,
+        })
+        .collect();
+    let uuid = resolve_identity(&identities, query).map_err(|error| match error {
+        StatisticResolutionError::NotFound { names } => {
+            let names: Vec<String> = names.into_iter().map(str::to_owned).collect();
+            crate::errors::not_found_error("Statistic", query, &names, "lox stats ls")
+        }
+        StatisticResolutionError::Ambiguous {
+            distinct_uuids,
+            candidates,
+        } => {
+            let lines: Vec<String> = candidates
+                .iter()
+                .map(|e| format!("  {}  group {}  {}", e.name, group_label(e.group), e.uuid))
+                .collect();
+            anyhow::anyhow!(
+                "Ambiguous: '{query}' matches {} statistics; pass the uuid instead:\n{}",
+                distinct_uuids,
+                lines.join("\n")
+            )
+        }
+    })?;
     Ok(entries.iter().filter(|e| e.uuid == uuid).collect())
 }
 
@@ -606,259 +599,24 @@ fn write_series(ctx: &RunContext, series: &StatSeries, out: &mut dyn Write) -> R
     Ok(())
 }
 
-/// Split a stats file name into `(uuid, group, "YYYY-MM")`.
-///
-/// Accepts `<uuid>.<YYYYMM>.xml` and `<uuid>_<group>.<YYYYMM>.xml`, where the
-/// uuid is the Loxone form `8-4-4-16` lowercase hex. Parsed by hand so no
-/// regex dependency is needed.
-fn parse_file_name(file: &str) -> Option<(String, Option<u32>, String)> {
-    let stem = file.strip_suffix(".xml")?;
-    let (stem, month) = stem.rsplit_once('.')?;
-    if month.len() != 6 || !month.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let (uuid, group) = match stem.split_once('_') {
-        Some((uuid, group)) => {
-            if group.is_empty() || !group.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            (uuid, Some(group.parse::<u32>().ok()?))
-        }
-        None => (stem, None),
-    };
-    let parts: Vec<&str> = uuid.split('-').collect();
-    let lens: Vec<usize> = parts.iter().map(|p| p.len()).collect();
-    if lens != [8, 4, 4, 16]
-        || !parts
-            .iter()
-            .all(|p| p.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
-    {
-        return None;
-    }
-    Some((
-        uuid.to_string(),
-        group,
-        format!("{}-{}", &month[..4], &month[4..]),
-    ))
-}
-
-/// Parse the HTML index served at `/stats/`.
-///
-/// Only `<li><a href="...">label</a></li>` entries whose href is a stats file
-/// name are returned; anything else (stylesheet, foreign files) is skipped.
+/// Map the shared index producer into the CLI's existing serialized record.
 pub fn parse_index(html: &str) -> Vec<StatEntry> {
-    let mut entries = Vec::new();
-    let mut rest = html;
-    while let Some(pos) = rest.find("<li>") {
-        rest = &rest[pos + 4..];
-        // Parse within this entry only, so a malformed entry is skipped
-        // without consuming the next one.
-        let item = rest.find("<li>").map_or(rest, |end| &rest[..end]);
-        let Some(after) = item.trim_start().strip_prefix("<a href=\"") else {
-            continue;
-        };
-        let Some((href, after)) = after.split_once('"') else {
-            continue;
-        };
-        let Some(gt) = after.find('>') else {
-            continue;
-        };
-        let after = &after[gt + 1..];
-        let Some((raw_label, _)) = after.split_once("</a>") else {
-            continue;
-        };
-        let Some((uuid, group, month)) = parse_file_name(href) else {
-            continue;
-        };
-        let decoded = unescape(raw_label)
-            .map(|c| c.into_owned())
-            .unwrap_or_else(|_| raw_label.to_string());
-        let yyyymm = month.replace('-', "");
-        let label = decoded
-            .trim()
-            .strip_suffix(yyyymm.as_str())
-            .unwrap_or(decoded.trim())
-            .trim_end()
-            .to_string();
-        let name = strip_label_suffix(&label);
-        let name = group
-            .and_then(|g| name.strip_suffix(&format!(" (Statistic Group: {g})")))
-            .unwrap_or(name)
-            .trim()
-            .to_string();
-        entries.push(StatEntry {
-            file: href.to_string(),
-            uuid,
-            group,
-            month,
-            name,
-            label,
-        });
-    }
-    entries
+    lox_core::statistics::parse_index(html)
+        .into_iter()
+        .map(|entry| StatEntry {
+            file: entry.file,
+            uuid: entry.uuid,
+            group: entry.group,
+            month: entry.month,
+            name: entry.name,
+            label: entry.label,
+        })
+        .collect()
 }
 
-fn strip_label_suffix(label: &str) -> &str {
-    if !label.ends_with(')') {
-        return label;
-    }
-    let mut depth = 0usize;
-    for (i, c) in label.char_indices().rev() {
-        match c {
-            ')' => depth += 1,
-            '(' => {
-                let Some(next) = depth.checked_sub(1) else {
-                    return label;
-                };
-                depth = next;
-                if depth == 0 {
-                    return label[..i].strip_suffix(' ').unwrap_or(label);
-                }
-            }
-            _ => {}
-        }
-    }
-    label
-}
-
-/// Read an attribute as an entity-decoded string.
-fn attr(e: &BytesStart, name: &[u8]) -> Result<Option<String>> {
-    for a in e.attributes() {
-        let a = a.context("malformed XML attribute")?;
-        if a.key.as_ref() == name {
-            return Ok(Some(a.unescape_value()?.into_owned()));
-        }
-    }
-    Ok(None)
-}
-
-/// Parse one statistics XML file (`<Statistics ...><S T=".." V=".." V2=".."/>`).
-pub fn parse_series(xml: &str) -> Result<StatSeries> {
-    let mut reader = Reader::from_str(xml);
-    let mut series: Option<StatSeries> = None;
-    let mut depth = 0usize;
-    // Attribute names holding the values, in output order: V, V2, V3, ...
-    let mut value_attrs: Vec<String> = Vec::new();
-    loop {
-        let event = reader.read_event().context("parsing statistics XML")?;
-        match &event {
-            Event::Start(_) => depth += 1,
-            Event::End(_) => {
-                depth = depth
-                    .checked_sub(1)
-                    .context("unexpected closing element in statistics XML")?;
-            }
-            Event::Eof if depth != 0 => bail!("truncated statistics XML: unclosed element"),
-            _ => {}
-        }
-        match event {
-            Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
-                b"Statistics" => {
-                    if series.is_some() {
-                        bail!("multiple <Statistics> elements in statistics file");
-                    }
-                    let name = attr(&e, b"Name")?.unwrap_or_default();
-                    let group = match attr(&e, b"StatsGroup")? {
-                        Some(g) => Some(
-                            g.trim()
-                                .parse::<u32>()
-                                .with_context(|| format!("invalid StatsGroup '{g}'"))?,
-                        ),
-                        None => None,
-                    };
-                    let mut outputs: Vec<String> = attr(&e, b"Outputs")?
-                        .map(|o| o.split(',').map(|s| s.trim().to_string()).collect())
-                        .unwrap_or_default();
-                    let num = match attr(&e, b"NumOutputs")? {
-                        Some(n) => n
-                            .trim()
-                            .parse::<usize>()
-                            .with_context(|| format!("invalid NumOutputs '{n}'"))?,
-                        None => outputs.len().max(1),
-                    };
-                    value_attrs = (1..=num)
-                        .map(|i| if i == 1 { "V".into() } else { format!("V{i}") })
-                        .collect();
-                    // Fall back to the attribute name for unlabelled outputs.
-                    outputs.resize(num, String::new());
-                    for (o, a) in outputs.iter_mut().zip(&value_attrs) {
-                        if o.is_empty() {
-                            *o = a.clone();
-                        }
-                    }
-                    series = Some(StatSeries {
-                        name,
-                        group,
-                        outputs,
-                        rows: Vec::new(),
-                    });
-                }
-                b"S" => {
-                    let Some(s) = series.as_mut() else {
-                        bail!("statistics row before <Statistics> element");
-                    };
-                    let t = attr(&e, b"T")?.context("statistics row without T attribute")?;
-                    let mut values = Vec::with_capacity(value_attrs.len());
-                    for a in &value_attrs {
-                        let raw = attr(&e, a.as_bytes())?
-                            .with_context(|| format!("row {t}: missing value {a}"))?;
-                        let v = raw
-                            .trim()
-                            .parse::<f64>()
-                            .with_context(|| format!("row {t}: {a}='{raw}' is not a number"))?;
-                        if !v.is_finite() {
-                            bail!("row {t}: {a}='{raw}' is not a finite number");
-                        }
-                        values.push(v);
-                    }
-                    s.rows.push((t, values));
-                }
-                _ => {}
-            },
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    series.context("no <Statistics> element in statistics file")
-}
-
-/// Concatenate month files (in month order) into one series.
-///
-/// Each part is `(month, series)`. A month file can end with the first
-/// timestamp of the next month; rows whose timestamp was already emitted by an
-/// earlier month are dropped (P5). Months whose outputs differ cannot be
-/// combined into one table and are an error.
+/// Preserve the CLI's single-message error chain around the typed merge.
 pub fn merge_months(parts: Vec<(String, StatSeries)>) -> Result<StatSeries> {
-    let mut parts = parts.into_iter();
-    let Some((mut prev_month, mut merged)) = parts.next() else {
-        return Ok(StatSeries {
-            name: String::new(),
-            group: None,
-            outputs: Vec::new(),
-            rows: Vec::new(),
-        });
-    };
-    let mut seen: HashSet<String> = merged.rows.iter().map(|(t, _)| t.clone()).collect();
-    for (month, part) in parts {
-        if part.outputs != merged.outputs {
-            bail!(
-                "Statistic '{}' has different outputs in {prev_month} ({}) and {month} ({}); \
-                 use --from/--to to select months with the same outputs",
-                merged.name,
-                merged.outputs.join(", "),
-                part.outputs.join(", ")
-            );
-        }
-        prev_month = month;
-        let fresh: Vec<_> = part
-            .rows
-            .into_iter()
-            .filter(|(t, _)| !seen.contains(t))
-            .collect();
-        seen.extend(fresh.iter().map(|(t, _)| t.clone()));
-        merged.rows.extend(fresh);
-    }
-    Ok(merged)
+    lox_core::statistics::merge_months(parts).map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 #[cfg(test)]
@@ -867,6 +625,97 @@ mod tests {
 
     const UUID_A: &str = "1a2b3c4d-0001-0002-ffff0123456789ab";
     const UUID_B: &str = "1a2b3c4d-0003-0004-ffffabcdef012345";
+
+    fn identity_entry(uuid: &str, name: &str, group: Option<u32>, month: &str) -> StatEntry {
+        StatEntry {
+            file: format!("{uuid}.{month}.xml"),
+            uuid: uuid.into(),
+            group,
+            month: month.into(),
+            name: name.into(),
+            label: name.into(),
+        }
+    }
+
+    #[test]
+    fn identity_characterization_priority_and_original_all_rows() {
+        let entries = vec![
+            identity_entry("winner", "Renamed", Some(8), "2026-12"),
+            identity_entry("other", "winner", None, "2026-11"),
+            identity_entry("winner", "Heat", None, "2026-10"),
+            identity_entry("third", "Heat Pump", None, "2026-09"),
+            identity_entry("winner", "Heat", Some(2), "2026-08"),
+            identity_entry("winner", "Heat", Some(2), "2026-08"),
+        ];
+        for query in ["WINNER", "hEaT", "renam"] {
+            let selected = resolve(&entries, query).unwrap();
+            assert_eq!(selected.len(), 4);
+            for (row, index) in selected.iter().zip([0, 2, 4, 5]) {
+                assert!(std::ptr::eq(*row, &entries[index]));
+            }
+        }
+    }
+
+    #[test]
+    fn identity_characterization_distinct_uuid_and_exact_ambiguity_chain() {
+        let entries = vec![
+            identity_entry("z", "Same", Some(2), "2026-12"),
+            identity_entry("z", "Same", None, "2026-11"),
+            identity_entry("a", "Same", Some(1), "2026-10"),
+            identity_entry("z", "Same", Some(2), "2026-09"),
+            identity_entry("a", "same", None, "2026-08"),
+        ];
+        let expected = "Ambiguous: 'sAmE' matches 2 statistics; pass the uuid instead:\n  Same  group -  z\n  Same  group 1  a\n  Same  group 2  z\n  same  group -  a";
+        let error = resolve(&entries, "sAmE").unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(error.chain().count(), 1);
+        let error = error.context("caller context");
+        assert_eq!(format!("{error:#}"), format!("caller context: {expected}"));
+        assert_eq!(error.chain().count(), 2);
+        assert_eq!(resolve(&entries[..2], "").unwrap().len(), 2);
+        assert!(resolve(&entries, "").is_err());
+    }
+
+    #[test]
+    fn identity_characterization_raw_unicode_uuid_case_and_not_found_help() {
+        let entries = vec![
+            identity_entry("ABC", "Upper", None, "1"),
+            identity_entry("lower", "İSTANBUL", None, "2"),
+            identity_entry("accent", "Café", None, "3"),
+        ];
+        assert_eq!(resolve(&entries, "İstanbul").unwrap()[0].uuid, "lower");
+        for query in ["ABC", " Cafe\u{301}", "Café ", "Istanbul", "cafe\u{301}"] {
+            assert!(resolve(&entries, query).is_err(), "{query}");
+        }
+        let rows = vec![
+            identity_entry("a", "Heat Pump", None, "1"),
+            identity_entry("a", "Heat Pump", Some(1), "2"),
+            identity_entry("b", "Kitchen", None, "1"),
+        ];
+        let expected = "Statistic 'Heat Pum' not found. Did you mean: Heat Pump?\n  Available: Heat Pump, Kitchen";
+        let error = resolve(&rows, "Heat Pum ").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            expected.replace("'Heat Pum'", "'Heat Pum '")
+        );
+        assert_eq!(error.chain().count(), 1);
+        let expected = error.to_string();
+        assert_eq!(
+            format!("{:#}", error.context("reading selection")),
+            format!("reading selection: {expected}")
+        );
+        let names: Vec<_> = (0..21)
+            .map(|i| identity_entry(&format!("{i}"), &format!("Name{i:02}"), None, "1"))
+            .collect();
+        assert_eq!(
+            resolve(&names, "zzzzzzzzzz").unwrap_err().to_string(),
+            "Statistic 'zzzzzzzzzz' not found.\n  21 options available. Run: lox stats ls"
+        );
+        assert_eq!(
+            resolve(&[], "Original QUERY").unwrap_err().to_string(),
+            "Statistic 'Original QUERY' not found.\n  Available: "
+        );
+    }
 
     const INDEX: &str = r#"<html><head><title>Statistics</title><link href="styles.css" rel="stylesheet"></head><body><ul>
 <li><a href="1a2b3c4d-0001-0002-ffff0123456789ab_2.202609.xml">Heat Pump (Statistic Group: 2) (Energy, Utility Room) 202609</a></li>
@@ -880,6 +729,115 @@ mod tests {
 </ul></body></html>"#;
 
     // ── parse_index ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn index_characterization_preserves_exact_markup_and_entry_boundaries() {
+        let file = format!("{UUID_A}.202610.xml");
+        let html = format!(
+            "<LI><a href=\"{file}\">upper li</a></LI>\
+             <li class=\"x\"><a href=\"{file}\">li attribute</a></li>\
+             <li><A href=\"{file}\">upper a</A></li>\
+             <li><a href='{file}'>single quote</a></li>\
+             <li><a class=\"x\" href=\"{file}\">attribute order</a></li>\
+             <li><a href=\"{file}\">unfinished\
+             <li><a href=\"{file}\">first</a>\
+             <li> \n<a href=\"{file}\" ignored=\"yes\">second</a>\
+             <li><a href=\"{file}\">first</a>"
+        );
+        let entries = parse_index(&html);
+        assert_eq!(
+            entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["first", "second", "first"]
+        );
+        assert_eq!(entries[0], entries[2]);
+    }
+
+    #[test]
+    fn index_characterization_preserves_filename_limits_without_calendar_validation() {
+        let accepted = [
+            (format!("{UUID_A}.000000.xml"), None, "0000-00"),
+            (format!("{UUID_A}_000.202613.xml"), Some(0), "2026-13"),
+            (
+                format!("{UUID_A}_4294967295.999999.xml"),
+                Some(u32::MAX),
+                "9999-99",
+            ),
+        ];
+        let mut html = String::new();
+        for (file, _, _) in &accepted {
+            html.push_str(&li(file, "accepted"));
+        }
+        for file in [
+            format!("{}.202610.xml", UUID_A.to_uppercase()),
+            "1a2b3c4d-0001-0002-ffff-0123456789ab.202610.xml".into(),
+            format!("{UUID_A}_4294967296.202610.xml"),
+            format!("{UUID_A}_+1.202610.xml"),
+            format!("{UUID_A}_-1.202610.xml"),
+            format!("{UUID_A}_ 1.202610.xml"),
+            format!("{UUID_A}_1 .202610.xml"),
+            format!("{UUID_A}_.202610.xml"),
+            format!("{UUID_A}.20261.xml"),
+            format!("{UUID_A}.2026100.xml"),
+            format!("{UUID_A}.２０２６１０.xml"),
+            format!("{UUID_A}.202610.XML"),
+        ] {
+            html.push_str(&li(&file, "rejected"));
+        }
+        let entries = parse_index(&html);
+        assert_eq!(entries.len(), accepted.len());
+        for (entry, (file, group, month)) in entries.iter().zip(accepted) {
+            assert_eq!(entry.file, file);
+            assert_eq!(entry.group, group);
+            assert_eq!(entry.month, month);
+        }
+    }
+
+    #[test]
+    fn index_characterization_preserves_raw_entity_fallback_and_suffix_rules() {
+        let file = format!("{UUID_A}_2.202610.xml");
+        let cases = [
+            (
+                " \tCaf&#xE9; &amp; 気 (Grid) (Statistic Group: 2) (Room (North)) 202610 \n",
+                "Café & 気 (Grid)",
+                "Café & 気 (Grid) (Statistic Group: 2) (Room (North))",
+            ),
+            (
+                " A &amp; B &unknown; (Room) 202610 ",
+                "A &amp; B &unknown;",
+                "A &amp; B &unknown; (Room)",
+            ),
+            ("Name(Room) 202610", "Name(Room)", "Name(Room)"),
+            (
+                "Name (unbalanced 202610",
+                "Name (unbalanced",
+                "Name (unbalanced",
+            ),
+            ("Name (Room)) 202610", "Name (Room))", "Name (Room))"),
+            (
+                "Name (Room) 202611",
+                "Name (Room) 202611",
+                "Name (Room) 202611",
+            ),
+            (
+                "Name (Statistic Group: 3) (Room) 202610",
+                "Name (Statistic Group: 3)",
+                "Name (Statistic Group: 3) (Room)",
+            ),
+        ];
+        for (raw, name, label) in cases {
+            let entries = parse_index(&li(&file, raw));
+            assert_eq!(entries[0].name, name, "{raw}");
+            assert_eq!(entries[0].label, label, "{raw}");
+        }
+        let entry = parse_index(&li(&file, "Name (Room) 202610")).remove(0);
+        assert_eq!(
+            serde_json::to_value(entry).unwrap(),
+            serde_json::json!({
+                "file": file, "uuid": UUID_A, "group": 2, "month": "2026-10",
+                "name": "Name", "label": "Name (Room)"
+            })
+        );
+    }
 
     #[test]
     fn index_parses_grouped_ungrouped_and_encoded_labels() {
@@ -978,6 +936,86 @@ mod tests {
     // ── parse_series ─────────────────────────────────────────────────────────
 
     #[test]
+    fn monthly_decoder_preserves_defaults_entities_and_opaque_row_order() {
+        let s = parse_series(
+            "\u{feff}text<Wrapper><Statistics Name=\"Caf&#xE9; &amp; 気\" \
+             StatsGroup=\" +2 \" NumOutputs=\"3\" Outputs=\" A &amp; B, , discarded, extra\">\
+             <S T=\" later &amp; raw \" V3=\"3\" V2=\" 2e1 \" V=\"-0\"/>\
+             </Statistics><S T=\"\" V=\"1\" V2=\"2\" V3=\"3\"/>\
+             <S T=\"\" V=\"4\" V2=\"5\" V3=\"6\"/></Wrapper>trailing<Other/>",
+        )
+        .unwrap();
+        assert_eq!(s.name, "Café & 気");
+        assert_eq!(s.group, Some(2));
+        assert_eq!(s.outputs, ["A & B", "V2", "discarded"]);
+        assert_eq!(s.rows[0].0, " later & raw ");
+        assert_eq!(s.rows[0].1, [-0.0, 20.0, 3.0]);
+        assert!(s.rows[0].1[0].is_sign_negative());
+        assert_eq!(s.rows[1].0, "");
+        assert_eq!(s.rows[2].0, "");
+        for (xml, labels, rows) in [
+            ("<Statistics/>", vec!["V"], 0),
+            ("<Statistics Outputs=\"\"/>", vec!["V"], 0),
+            ("<Statistics Outputs=\" A, ,A \"/>", vec!["A", "V2", "A"], 0),
+            (
+                "<Statistics NumOutputs=\"0\"><S T=\"x\"/></Statistics>",
+                vec![],
+                1,
+            ),
+            (
+                "<Statistics Name=\"n\" StatsGroup=\"0\" Outputs=\"A\" NumOutputs=\"1\" broken/>",
+                vec!["A"],
+                0,
+            ),
+        ] {
+            let s = parse_series(xml).unwrap();
+            assert_eq!(s.outputs, labels, "{xml}");
+            assert_eq!(s.rows.len(), rows, "{xml}");
+        }
+    }
+
+    #[test]
+    fn monthly_decoder_preserves_validation_precedence_and_context() {
+        for (xml, expected) in [
+            ("", "no <Statistics> element in statistics file"),
+            ("not XML", "no <Statistics> element in statistics file"),
+            ("<S/>", "statistics row before <Statistics> element"),
+            (
+                "<Statistics/><Statistics StatsGroup=\"bad\"/>",
+                "multiple <Statistics> elements in statistics file",
+            ),
+            ("<Statistics>", "truncated statistics XML: unclosed element"),
+            ("<Statistics><S/>", "statistics row without T attribute"),
+            ("<Statistics><S T=\"x\"/>", "row x: missing value V"),
+            ("<Statistics StatsGroup=\"-1\"/>", "invalid StatsGroup '-1'"),
+            ("<Statistics NumOutputs=\"-1\"/>", "invalid NumOutputs '-1'"),
+            ("<Statistics broken/>", "malformed XML attribute"),
+            (
+                "<Statistics><S T=\"x\" V=\"oops\"/></Statistics>",
+                "row x: V='oops' is not a number",
+            ),
+            (
+                "<Statistics><S T=\"x\" V=\"1e9999\"/></Statistics>",
+                "row x: V='1e9999' is not a finite number",
+            ),
+        ] {
+            assert_eq!(
+                parse_series(xml).unwrap_err().to_string(),
+                expected,
+                "{xml}"
+            );
+        }
+        for xml in [
+            "</Statistics>",
+            "<Statistics></Other>",
+            "<Statistics Name=\"&unknown;\"/>",
+            "<Statistics Name=\"n\" Name=\"duplicate\"/>",
+        ] {
+            assert!(parse_series(xml).is_err(), "{xml}");
+        }
+    }
+
+    #[test]
     fn series_with_one_output() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <Statistics Name="Kitchen" NumOutputs="1" Outputs="Temperature">
@@ -1072,6 +1110,116 @@ mod tests {
     }
 
     // ── merge_months ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn merge_empty_and_first_metadata_keep_caller_order_without_validation() {
+        let empty = merge_months(vec![]).unwrap();
+        assert_eq!(
+            empty,
+            StatSeries {
+                name: String::new(),
+                group: None,
+                outputs: vec![],
+                rows: vec![],
+            }
+        );
+        let mut first = series(&[("z", 1.0), ("a", 2.0)]);
+        first.name = "first".into();
+        first.group = Some(u32::MAX);
+        first.outputs = vec![" raw ".into(), " raw ".into()];
+        let mut later = series(&[("between", 3.0)]);
+        later.name = "ignored".into();
+        later.group = None;
+        later.outputs = first.outputs.clone();
+        let merged = merge_months(vec![
+            ("not-a-month".into(), first.clone()),
+            ("0000-00".into(), later.clone()),
+            ("0000-00".into(), later),
+        ])
+        .unwrap();
+        assert_eq!(merged.name, first.name);
+        assert_eq!(merged.group, first.group);
+        assert_eq!(merged.outputs, first.outputs);
+        assert_eq!(
+            merged.rows,
+            vec![
+                ("z".into(), vec![1.0]),
+                ("a".into(), vec![2.0]),
+                ("between".into(), vec![3.0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_deduplicates_only_earlier_parts_and_preserves_value_bits() {
+        let bits = [
+            0x8000_0000_0000_0000,
+            0x7ff8_0000_0000_0042,
+            0x7ff0_0000_0000_0001,
+            0xfff0_0000_0000_0000,
+            1,
+        ];
+        let merged = merge_months(vec![
+            (
+                "z".into(),
+                series(&[
+                    ("same", f64::from_bits(bits[0])),
+                    ("same", f64::from_bits(bits[1])),
+                ]),
+            ),
+            (
+                "a".into(),
+                series(&[
+                    ("same", 123.0),
+                    ("new", f64::from_bits(bits[2])),
+                    ("new", f64::from_bits(bits[3])),
+                    (" same", f64::from_bits(bits[4])),
+                ]),
+            ),
+            ("a".into(), series(&[("new", 456.0), ("same", 789.0)])),
+        ])
+        .unwrap();
+        assert_eq!(
+            merged
+                .rows
+                .iter()
+                .map(|(t, _)| t.as_str())
+                .collect::<Vec<_>>(),
+            ["same", "same", "new", "new", " same"]
+        );
+        assert_eq!(
+            merged
+                .rows
+                .iter()
+                .map(|(_, v)| v[0].to_bits())
+                .collect::<Vec<_>>(),
+            bits
+        );
+    }
+
+    #[test]
+    fn merge_mismatch_keeps_exact_message_and_single_cause_after_empty_part() {
+        let mut first = series(&[("row", 1.0)]);
+        first.outputs = vec!["A".into(), "B".into()];
+        let mut empty = first.clone();
+        empty.name = "ignored".into();
+        empty.rows.clear();
+        let mut mismatch = series(&[("row", 2.0)]);
+        mismatch.outputs = vec!["B".into(), "A".into()];
+        let err = merge_months(vec![
+            ("later".into(), first),
+            ("empty".into(), empty),
+            ("earlier".into(), mismatch),
+        ])
+        .unwrap_err();
+        let expected = "Statistic 'Heat Pump' has different outputs in empty (A, B) and earlier (B, A); use --from/--to to select months with the same outputs";
+        assert_eq!(err.to_string(), expected);
+        assert_eq!(format!("{err:#}"), expected);
+        assert_eq!(
+            err.chain().map(ToString::to_string).collect::<Vec<_>>(),
+            [expected]
+        );
+    }
 
     fn series(rows: &[(&str, f64)]) -> StatSeries {
         StatSeries {
@@ -1170,6 +1318,7 @@ mod tests {
             no_header: false,
             non_interactive: true,
             trace_id: None,
+            telemetry: None,
         }
     }
 
@@ -1243,6 +1392,47 @@ mod tests {
              2026-10-01 00:00:00,21.25,49\n\
              2026-10-01 00:30:00,21,50.5\n"
         );
+    }
+
+    #[test]
+    fn get_monthly_decoder_failure_emits_no_partial_rows_and_keeps_error_chain() {
+        let server = MockServer::start();
+        let index = serve_index(&server);
+        let sep = serve_file(
+            &server,
+            &format!("{KITCHEN}.202609.xml"),
+            &kitchen_xml(&[("first", 21.5)]),
+        );
+        let oct = serve_file(
+            &server,
+            &format!("{KITCHEN}.202610.xml"),
+            r#"<Statistics><S T="second" V="warm"/></Statistics>"#,
+        );
+        let mut out = Vec::new();
+        let error = get(
+            &run_ctx(false, true),
+            &mock_client(&server),
+            "Kitchen",
+            None,
+            &MonthRange {
+                from: None,
+                to: None,
+            },
+            &mut out,
+        )
+        .unwrap_err();
+        assert!(out.is_empty());
+        assert_eq!(
+            error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+            [
+                format!("parsing {KITCHEN}.202610.xml"),
+                "row second: V='warm' is not a number".into(),
+                "invalid float literal".into(),
+            ]
+        );
+        index.assert_hits(1);
+        sep.assert_hits(1);
+        oct.assert_hits(1);
     }
 
     #[test]

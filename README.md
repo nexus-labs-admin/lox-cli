@@ -48,6 +48,36 @@ cargo build --release    # Binary at target/release/lox (~14MB)
 
 **Requirements:** Loxone Miniserver Gen 1 or 2 (firmware 12.0+), local network access.
 
+### Shared Rust library
+
+[`lox-core`](crates/lox-core/README.md) exposes the offline LoxCC/LxRes/backup ZIP
+byte codec used by `lox config extract` and `lox config compress`, plus an optional
+typed HTTP clock runtime used by `lox live time`. It requires Rust 1.91; offline
+archive consumers need no networking feature. The clock API distinguishes wire
+observations, explicit envelope validation, and legacy CLI formatting, with
+cancellation and an explicitly owned blocking driver. Typed in-memory control
+resolution is shared with the CLI selector too. Optional `configuration-xml`
+provides typed byte-input XML control/room inventory, summaries and the structural
+comparison used by `lox config diff`. Typed color codecs also serve `color encode`
+and `color decode`. Formatting, context selection and XML editing stay in the CLI.
+See the Core README for additional capabilities and compatibility limits.
+
+An experimental, separate [generated binding facade](docs/toolkit-archive-bindings.md)
+provides native Python bytes and one Java 22+ FFM API also used by Kotlin.
+Archive operations, typed read-only raw-XML control/room/summary inspection, pure control
+selection, stateless typed LoxApp3 catalog parsing/filtering, and production-backed strict clock reads have Windows AMD64 artifact
+tests, including actual I/O cancellation and explicit shutdown through
+Python asyncio and Java/Kotlin futures. Inspection does not expose comparison,
+statistics, authentication, color, validation or editing.
+Catalog calls reparse caller-supplied bytes each time; they add no HTTP/cache or
+control transport. Other runtime operations/subscriptions,
+cross-platform qualification and full CLI parity are not claimed. Prototype
+prerequisite compositions remain publication-gated until coherent review/integration.
+The matching native color candidate adds typed offline RGB/HSV/temperature
+encoding and explicit legacy decode/raw-mood observations, available only when
+published with its same-build wheel/JAR/DLL; it adds no Lighting eligibility,
+device qualification, editing or transport parity.
+
 ## Quick Start
 
 ```bash
@@ -78,9 +108,63 @@ The CLI handles LoxCC compression, CRC32 checksums, UUID generation, connector m
 
 `lox config energy` provides a validated **EnergyManager2 storage pilot**: inspect
 stored/effective values, set three scalar parameters, and configure/reorder its
-twelve existing load slots. It preserves full records and wiring, supports
+twelve existing load slots, including explicit customized-name clearing with
+`--no-name`. It preserves full records and wiring, supports
 `--dry-run`/`--save-as`, and does **not** claim complete GUI or runtime parity.
 See [EnergyManager2 commands](COMMANDS.md#energymanager2-verified-storage-pilot).
+
+`lox config status-monitor` inspects existing **Status Monitor** state priorities
+and moves one configured row up/down by persistent State `Id`, retaining its
+output association and wiring. Rest stays last; inherited/grouped configurations
+and ambiguous storage are refused. This is source-backed local-file editing,
+not a native GUI/runtime qualification. See
+[Status Monitor priorities](COMMANDS.md#status-monitor-existing-state-priority).
+
+`lox config lighting` inspects stored **LightController2** moods, per-output
+numeric/color editor kinds and output references. Opaque values and unsupported
+storage shapes remain unresolved; `set-mood-color` is still raw packed storage, not a
+mode-aware equivalent. Its source-backed `recount-moods` repairs only the stored scene count,
+preserving output widths, sparse values and unknown data; existing `add-mood`
+also recounts and uses the recovered 18-output/type-preserving initialization
+and native-style automatic SID/CID selection, with atomic exhaustion errors.
+Explicit ID options retain their legacy behavior. These storage guarantees
+are not native GUI/runtime parity. `lighting set-mood-level` validates the stored
+numeric editor kind and writes a type-preserving level in 0..100, rejecting
+color/unsupported modes and out-of-range values instead of clamping or RGB-packing.
+One accepted native numeric edit/save/reopen confirms its selected encoding,
+not the native dialog's unrelated output/HCL normalization. See
+[Lighting commands](COMMANDS.md#lighting-stored-inspection-and-mood-count-repair).
+`lighting set-mood-cid` separately supports existing-record CID swaps and
+source-backed ordered SID/selection-reference updates, with atomic ambiguity
+and exhaustion errors; it does not change `add-mood` override behavior.
+Bounded `rename-mood` and `set-mood-mix` operations edit one existing Name or
+eligible role-independent MixMod flag. Unsupported name normalization and
+role-forced checkbox states are rejected, not silently approximated.
+Omitted MixMod has the recovered default false and stays omitted on no-op;
+unsupported explicit flag values are never silently defaulted.
+Native ASCII boolean case variants are accepted without rewriting no-op spelling.
+Omitted CID likewise uses recovered0 for mix eligibility without inserting an ID.
+`lighting inspect-mood-options` reads raw/effective/default flags and display
+text, with bounded cycling/mix projections rather than GUI-permission guesses.
+IID is exposed as a numeric icon reference with unresolved catalog mapping,
+not an input binding or a raw icon-assignment surface.
+`lighting inspect-mood-references FILE BLOCK --mood SID_OR_NAME` reads the
+selected stored SID's numeric matches in the available ScMv prefix bounded by
+OpM count. It retains raw spellings and opaque unvisited tails, distinguishes
+missing vectors from unsupported needed values, and rejects ambiguous identity.
+This never saves or predicts Num-limited import, edit admission, GUI or runtime state.
+`lighting set-mood-skip` changes only the cycling exclusion flag and reports
+the native checkbox's inverse state. Omitted `SkipNext` means false; no-op
+requests preserve omission, and unsupported explicit values fail atomically.
+`lighting set-mood-display-name` edits only SName (uppercase ASCII or explicit
+clear), separately from Name. `--normalize-ascii` explicitly enables recovered
+lowercase ASCII conversion; default validation stays strict, without silent
+transliteration. Inspection warns about numerically duplicated positive SIDs
+and nonzero CIDs without rewriting stored identities.
+`lighting set-mood-sid` supports ordinary SID1..90 reassignment and explicit
+occupied-ID exchange (`--swap`), including ordered selection-reference remaps.
+Free SID32..90 with positive CID requires `--allow-cid-clear`; occupied/no-op
+branches retain CIDs. Ambiguous identities and temporary SID99 collisions fail.
 
 ---
 
@@ -275,6 +359,29 @@ All errors include fuzzy matching suggestions and available options:
 Error: Block 'Threshold' not found.
   Did you mean: GreaterEqual, LessEqual, AnalogThresholdTrigger?
 ```
+
+Agents can report CLI problems without a Miniserver connection:
+
+```bash
+lox report --title "Short issue summary" --body "Sanitized reproduction, expected and actual behavior" --json
+```
+
+Creates a public GitHub issue using `gh` when available; otherwise submits the
+supplied title/body through PostHog, respecting telemetry opt-outs. Returns a
+delivery receipt or a nonzero error. Use `--body-file -` for stdin or `--dry-run`
+to preview. Never include secrets or private configuration. See
+[issue reporting](COMMANDS.md#issue-reporting) and [telemetry](TELEMETRY.md).
+
+Help, command schemas, and failures point agents to `lox report --help`.
+JSON errors include `report_hint`, including invalid arguments; Rust panics
+preserve their diagnostics and show the same guidance. Fix input/setup mistakes
+first; report reproducible CLI bugs, not every failed command. No issue reports
+are sent automatically.
+
+Maintainers: use the [telemetry access and triage guide](TELEMETRY.md#maintainer-guide-access-learn-and-fix)
+for dashboard links, report/feedback lookup, sanitized exception stacks, and the
+reproduce/fix/verify workflow. Access requires PostHog project membership;
+credentials are not stored in the repository.
 
 ### Multiple Miniservers
 

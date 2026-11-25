@@ -1,9 +1,10 @@
 # Advanced block configuration and UX coverage
 
 This investigation covers configuration authoring, validation, and feedback,
-not upload fidelity. The baseline is Loxone Config **17.2.10.21**, with
-Qt **6.10.2**, executable SHA-256
+not upload fidelity. The baseline is Loxone Config **17.2.10.21**, executable SHA-256
 `7b55e3ef18401574ab967c5c6a0140cd5a66dc728521ebba04ad53093577d8b3`.
+Qt **6.10.2** is the revision-13 decoder's format reference, not an independently
+verified embedded-library build/version.
 Recovered code, resource payloads, and full reports remain local and Git-ignored.
 The inventory does not access or modify a Miniserver.
 
@@ -39,14 +40,207 @@ Missing or conflicting profiles remain explicit decoding issues without a
 guessed object base. Revision alone does not select a header width. Seven
 reviewed entries demonstrated that the historical scanner's
 `metaobject_address` was eight bytes after the code-returned base; their
-absolute strings/data/dispatcher pointers remain correct. The other 638 entries
-have not received that independent assessment. Do not blanket-shift the frozen
+absolute strings/data/dispatcher pointers remain correct. At that stage, the
+other 638 entries had not received that assessment. Do not blanket-shift the frozen
 645-record snapshot or its address-derived class IDs.
 
 Use a new `--output` directory for normalized extractions: the inventory refuses
 to overwrite an existing `qt-metadata.json`. Corrected addresses produce new
 snapshot identities, not an in-place migration of historical evidence or an
 increase in candidate/runtime coverage.
+
+### Reviewed eight-dialog extension
+
+A later, independently reviewed cohort adds **eight header layouts and 72
+class-local metadata methods** (58 distinct method names). These classes are
+disjoint from the original seven:
+
+| Qt metadata class | Local methods |
+|---|---:|
+| `CEnergyManagerConfigurationDlg` | 5 |
+| `CPresenceDetectorConfigurationDlg` | 16 |
+| `CTargetBrightnessConfigurationDlg` | 13 |
+| `CNanoMotorControllerConfigurationDlg` | 15 |
+| `CLoadManagerConfigurationDlg` | 3 |
+| `CTouchFlexConfigurationDlg` | 8 |
+| `CWallboxManagerConfigurationDlg` | 3 |
+| `CTouchPureDisplayConfigurationDlg` | 9 |
+
+Parent aggregation through the unchanged, source-pinned decoder produces a
+**separate 15-layout, 93-class-local-method snapshot**, leaving **630/645 layouts
+unvalidated**. Every reviewed class/method record matches its original cohort.
+Method names shared across classes are not deduplicated as implementations.
+The frozen 645-row corpus and original seven-class snapshot remain unchanged.
+
+The eight-class witness supplement SHA-256 is
+`be2fd3c6bd6225fa843c42cdb83a874ddb3c7837448764618b0811a638d7bec8`;
+independent admission is
+`84670348b24865d7c9e6300ef56441d228bdd122ebab4e7e86f267b4ac513b2e`.
+The separate aggregate snapshot SHA-256 is
+`906a3ee9d81ce2c9ef9299a03ce632667b39ba0f3c08cdbdb0cba79489865b2c`.
+Its profiles are retained at
+`.reverse-engineering\element-atlas\qt-reviewed-cohorts-20261107T1540Z\reviewed-fifteen-profiles.json`
+(SHA-256 `067a25bdd784268447b6eb0bc80abd590906f48266d647ee9b4bd84f4ad7e491`).
+Use that file with the existing `--qt-layout-profiles` option and a new output
+directory; never overwrite a historical snapshot.
+
+This admission covers revision-13 metadata tables and code-returned header-base
+witnesses only. Five new callback bodies remain absent from the frozen canonical
+index; their callable ABI and implementation remain unknown. All 72 new methods'
+GUI bindings, implementation behavior and runtime connections remain unverified.
+Dialog names do not prove factory/XML/control ownership, and no catalog-identity,
+UX-rule or native-parity count is promoted. The initial future-dated milestone
+was corrected append-only; its historical event time remains unknown.
+
+### Reviewed twelve-dialog extension
+
+A disjoint independently reviewed cohort adds **12 header layouts and 41
+class-local metadata methods** (30 distinct names):
+
+| Qt metadata class | Local methods |
+|---|---:|
+| `CClimateCtrlSelectionDlg` | 3 |
+| `CDatabaseConnectorConfigurationDlg` | 1 |
+| `CDatabaseConnectorTableConfigurationDlg` | 6 |
+| `CObjectTypeConfigurationDialog` | 1 |
+| `CPlayerGroupConfigurationDialog` | 1 |
+| `CAppLocationSelectionDlg` | 4 |
+| `CNodeConfigurationWidget` | 12 |
+| `CTrustConfigurationDlg` | 3 |
+| `CIrrigationConfigurationDlg` | 0 |
+| `CPriorityConfigurationDlg` | 5 |
+| `CControlLinkingSelectionDlg` | 3 |
+| `CControlSelectionDlg` | 2 |
+
+Parent replay of 639 independent PE-span assertions and 190 negative checks,
+followed by explicit aggregation through the unchanged decoder, produces a new
+**27-layout, 134-class-local-method snapshot**. **618/645 layouts remain
+unvalidated**. Every old and new class/method record matches its source cohort;
+the original 645-row corpus and earlier 7/21 and 15/93 snapshots are unchanged.
+A zero-method layout is not an implementation or behavior result.
+
+Independent admission SHA-256:
+`cb930dd09ed845448b353566b112543c9694db57e168159e2f1119fa304e997e`.
+The new snapshot SHA-256 is
+`9f4911dbc96a19f68eacaa03c906d1ef84c18ed5b74c24db85e5031e9b7dd237`;
+its profiles are
+`.reverse-engineering\element-atlas\qt-reviewed-cohorts-20261107T1832Z\reviewed-twenty-seven-profiles.json`
+(SHA-256 `0a8f8f25b6ca93857d1cf2b48eeb4caa8f8134c31432bdac28e142165c7aca3d`).
+Use these profiles with `--qt-layout-profiles` and a new output directory.
+The parent aggregation receipt SHA-256 is
+`a1a4bb3aee1143685b8ea0c6accae62b518cffb158dfed878b6e175e3e31f8f0`.
+
+This remains static metadata-layout admission only. Eight new callback bodies,
+all 41 implementation/GUI/runtime bindings, all 12 dynamic getter paths and
+receiver ownership remain unknown. Qt 6.10.2 is a format reference, not a
+verified embedded library version. No catalog identity, native behavior or
+parity count is promoted.
+
+### Reviewed Energy Manager emitted dispatch
+
+For the pinned **17.2.10.21** executable, all five class-local metadata entries
+of `CEnergyManagerConfigurationDlg` have independently replayed emitted
+dispatch paths to distinct canonical, non-thunk functions:
+
+| Local index | Qt metadata method | Emitted destination |
+|---|---|---|
+| 0 | `OnUpdateButtons` | `0x140939f30` |
+| 1 | `OnSortDown` | `0x140939e90` |
+| 2 | `OnSortUp` | `0x140939ee0` |
+| 3 | `OnHelp` | `0x140939e50` |
+| 4 | `OnModified` | `0x140939e80` |
+
+These are **5/5 emitted-dispatch bindings for this one dialog**, not UX or
+behavior coverage. With `EDX=0` and `R8D` equal to the selected local index,
+callback `0x140c084d0` reaches the corresponding destination without changing
+`RCX`. For index 1, the direct tail transfer is at `0x140c08500`. The dispatcher
+itself has no exact-address entry in the frozen canonical index; its absence
+does not establish an analyzer failure or an additional canonical body.
+
+The `OnSortDown` handler passes a returned value `n` in `EDX` and `n+1` in `R8D` to
+`0x140939b10`, with its entry object in `RCX`. That helper was not followed in
+this receipt. Actual reordering, model mutation, persistence, widget delivery
+and native block behavior remain unknown; neither the method name nor these
+register facts prove them. This is not a GUI-widget connection, control/XML
+identity or runtime receiver proof. The 27/134 metadata aggregate and all
+catalog/native-behavior denominators remain unchanged.
+
+The other immediate bodies add only bounded machine facts. `OnSortUp` passes
+the low-32-bit values `n` and `n-1` to the same helper. `OnModified` writes dword
+`1` at entry `RCX+0x1548` and returns; the field's semantic identity remains
+unknown. `OnHelp` loads another receiver and jumps through slot `+0x1f8`, whose
+concrete target remains unknown. `OnUpdateButtons` contains comparisons and a
+static Qt import reference; no imported implementation or downstream effects
+were followed. Shared callees do not prove method equivalence.
+
+Original index-1 receipt:
+`.reverse-engineering\element-atlas\energy-sortdown-native-binding-20261107T2046Z`.
+Report SHA-256:
+`a1cf6c68f4020367f98745ea6b7d64c645d3ff616d3c17d93080f399bf7838e5`;
+manifest SHA-256:
+`556e35f97b89ed85feb7a6cea573e8034cc357be64663fa9e8a0e9b96301171b`.
+The receipt's `python -B analyze.py --verify` checks its pinned inputs and
+reconstructs the report in memory; parent replay covered five positive and
+nine negative checks without rewriting the original evidence.
+
+The separate four-method receipt is
+`.reverse-engineering\element-atlas\energy-dialog-remaining-dispatch-20261107T2101Z`.
+Report SHA-256:
+`2e3556eac88ad3d282a6b330693eb7bb49f60dc9b7609c0e231feaab736c861f`;
+manifest SHA-256:
+`2894393c6e288e2f3d0387ad405a0672ba04a0e7271028669de2abea869e7525`.
+Parent replay covered 41 focused checks and byte-identical reconstruction.
+Index 1 and both earlier receipts remain unchanged.
+
+A separately scoped inspection of `0x140939b10` remains **UNKNOWN**: calls at
+`0x140939cb7` and `0x140939cd4` are indirect through slot `+0xe0`, without
+concrete receiver/vptr targets. The helper conditionally writes dword `1` to its
+entry object at `+0x1548` after bounds checks and returning calls. That store does
+not identify a modified flag, prove reordering, or establish persistence.
+No further callee was inspected.
+
+That separate receipt is
+`.reverse-engineering\element-atlas\energy-sortdown-helper-operation-20261107T2052Z`.
+Its report SHA-256 is
+`c965f09ca50d408f207348be62f457de5e27cdf7996ac5a3ac57e4889a5c8f6c`;
+manifest SHA-256 is
+`47ccc68c65511636a1628888031cc8304b9f72d5146ab98677d4846f6509a86c`.
+Parent replay covered five positive and 14 negative checks, preserving the
+earlier no-helper-followed receipt and its narrower admission.
+
+For another release, rediscover the class/method signature and review its
+header profile, method indices, dispatcher paths and destinations against that
+release's image hash. Do not reuse these indices or addresses as proof, or make
+the old receipt accept a changed image.
+
+### Reviewed Load Manager emitted dispatch
+
+The same pinned release also has three independently replayed emitted-dispatch
+bindings for `CLoadManagerConfigurationDlg`:
+
+| Local index | Qt metadata method | Emitted destination |
+|---|---|---|
+| 0 | `OnUpdateButtons` | `0x140b4f210` |
+| 1 | `OnSortDown` | `0x140b4f110` |
+| 2 | `OnSortUp` | `0x140b4f190` |
+
+Callback `0x140d280a0` preserves `RCX` on these selected paths. This is **3/3
+class-local emitted bindings**, not control/XML ownership, delivered widget
+input, reordering, persistence or runtime behavior. Only each selected immediate
+handler body was inspected; shared calls do not establish method equivalence.
+The receipt's `native_trace_stopped_at_verdict` label denotes static
+native-machine-code investigation, not a live debugger trace.
+
+Local receipt:
+`.reverse-engineering\element-atlas\load-manager-dialog-dispatch-20261107T2118Z`.
+Report SHA-256:
+`81956355c2d3ee02cef24607e6c67d4d7174ea0fd1c2def203114cb91d1bcfa8`;
+manifest SHA-256:
+`06ba99936b4e15438f996594b445daafee2ea6a4012e5c7edd0d685751c4bbd3`.
+Parent replay covered 34 focused checks and byte-identical reconstruction.
+These three edges add no layouts or methods to the 27/134 metadata aggregate;
+618/645 layouts remain unvalidated. They are separate from catalog identity
+admissions and add no native pass.
 
 For release comparisons, retain separate output directories with `--output`.
 Compare control identities, parameter patterns, and Qt class/member signatures,
@@ -70,6 +264,9 @@ remain distinct, such as `C[Type=LightscenesC]`.
 
 ## Baseline findings
 
+The Qt scanner counts below are historical observations, not the independently
+reviewed 27-layout/134-method aggregate above.
+
 | Measurement | Observed |
 |---|---:|
 | Catalog records examined | 522 |
@@ -79,9 +276,9 @@ remain distinct, such as `C[Type=LightscenesC]`.
 | Catalog parameter entries | 757 |
 | Parameter entries associated with existing XML keys | 645 |
 | Configuration fixtures read by the native parser | 36, with no omissions |
-| Recognized revision-13 Qt meta-objects decoded | 645 |
-| Declared Qt methods | 1,892 |
-| Declared Qt properties | 283 |
+| Historical revision-13 Qt candidate rows | 645 |
+| Historical declared Qt method records | 1,892 |
+| Historical declared Qt property records | 283 |
 | Qt dialog/editor/configuration name candidates | 214 |
 | MSVC RTTI dialog/editor name leads | 539 |
 | English Windows dialog templates decoded | 113 |

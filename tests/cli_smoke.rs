@@ -2,7 +2,101 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 fn lox() -> Command {
-    Command::cargo_bin("lox").unwrap()
+    let mut command = Command::cargo_bin("lox").unwrap();
+    command.env("LOX_TELEMETRY", "0");
+    command
+}
+
+#[test]
+fn control_resolution_preserves_cli_errors_and_candidate_order() {
+    use httpmock::{Method::GET, MockServer};
+    use serde_json::{Value, json};
+    use std::fs;
+
+    let dir = tempfile::Builder::new()
+        .prefix(".control-resolution-")
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+        .unwrap();
+    let server = MockServer::start();
+    fs::create_dir(dir.path().join("home")).unwrap();
+    let config = dir.path().join("config.yaml");
+    fs::write(
+        &config,
+        format!(
+            "host: {}\nuser: test\npass: synthetic-only\nverify_ssl: true\ntelemetry: false\n",
+            server.base_url()
+        ),
+    )
+    .unwrap();
+    let structure = server.mock(|when, then| {
+        when.method(GET).path("/data/LoxApp3.json");
+        then.json_body(json!({
+            "rooms": {"r": {"name": "Room"}},
+            "controls": {
+                "first-key": {"name": "Light Extra", "room": "r"},
+                "last-key": {"name": "Light"}
+            }
+        }));
+    });
+    for (query, category, message, candidates) in [
+        (
+            "Light",
+            "ambiguous_control",
+            "Ambiguous: 'Light'. Use [Room] qualifier or --room flag.",
+            format!(
+                "  {:40} [-]  last-key\n  {:40} [Room]  first-key\n",
+                "Light", "Light Extra"
+            ),
+        ),
+        (
+            "Missing",
+            "control_not_found",
+            "No control matching 'Missing'",
+            String::new(),
+        ),
+    ] {
+        for json_output in [false, true] {
+            let mut command = lox();
+            command
+                .current_dir(dir.path())
+                .env("LOX_CONFIG", &config)
+                .env("LOX_HOME", dir.path().join("home"))
+                .env("HOME", dir.path().join("home"))
+                .env("USERPROFILE", dir.path().join("home"))
+                .env_remove("HOMEDRIVE")
+                .env_remove("HOMEPATH")
+                .env_remove("LOX_HOST")
+                .env_remove("LOX_USER")
+                .env_remove("LOX_PASS")
+                .env_remove("LOX_SERIAL")
+                .env("HTTP_PROXY", server.base_url())
+                .env("HTTPS_PROXY", server.base_url())
+                .env("ALL_PROXY", server.base_url())
+                .env("NO_PROXY", "127.0.0.1,localhost")
+                .timeout(std::time::Duration::from_secs(15))
+                .args(["--quiet", "--no-color", "live", "get", query]);
+            if json_output {
+                command.arg("--json");
+            }
+            let assertion = command.assert().code(1);
+            let output = assertion.get_output();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.starts_with(&candidates), "{stderr}");
+            if json_output {
+                let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(envelope["error"], category);
+                assert_eq!(envelope["message"], message);
+                assert_eq!(stderr, candidates);
+            } else {
+                assert!(output.stdout.is_empty());
+                assert!(
+                    stderr[candidates.len()..].starts_with(&format!("Error: {message}\n")),
+                    "{stderr}"
+                );
+            }
+        }
+    }
+    structure.assert_hits(4);
 }
 
 // ── Top-level --help and --version ─────────────────────────────────────────
@@ -71,6 +165,90 @@ fn config_add_help_describes_block_type_discovery() {
         .stdout(predicate::str::contains("lox-cli blocks list").not());
 }
 
+#[test]
+fn operating_mode_add_json_quiet_and_unsupported_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("modes.Loxone");
+    let destination = dir.path().join("destination.Loxone");
+    let mut modes: String = (1..=6).map(|id| format!("<C Type=\"Mode\" U=\"00000000-0000-{id:04x}-ffff112233445566\" Title=\"Builtin{id}\" Mode=\"-{id}\"/>")).collect();
+    for id in 0..=9 {
+        let identity = id + 1;
+        modes.push_str(&format!("<C Type=\"Mode\" U=\"00000000-0000-{identity:04x}-1500000000000000\" Title=\"Day{id}\" Mode=\"{id}\"/>"));
+    }
+    let input = format!(
+        "<ControlList><C Type=\"Document\" U=\"11111111-2222-3333-ffff112233445566\" NumO=\"18\"><C Type=\"ModeCaption\" U=\"22222222-2222-3333-ffff112233445566\">{modes}</C></C></ControlList>"
+    );
+    std::fs::write(&file, input).unwrap();
+    let result = lox()
+        .args([
+            "config",
+            "add",
+            "--type",
+            "operating-mode",
+            "--title",
+            "Evening",
+            "-o",
+            "json",
+        ])
+        .arg(&file)
+        .assert()
+        .success();
+    let json: serde_json::Value = serde_json::from_slice(&result.get_output().stdout).unwrap();
+    assert_eq!(json["added"]["mode"], -7);
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(json["added"]["title"], "Evening");
+    for field in ["uuid", "input_uuid", "output_uuid"] {
+        let uuid = json["added"][field].as_str().unwrap();
+        assert_eq!(written.matches(&format!(r#"U="{uuid}""#)).count(), 1);
+    }
+    lox()
+        .args(["-q", "config", "add", "--type", "Mode", "--title", "Night"])
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout("");
+    let before = std::fs::read(&file).unwrap();
+    std::fs::write(&destination, b"untouched").unwrap();
+    lox()
+        .args([
+            "config",
+            "add",
+            "--type",
+            "Mode",
+            "--title",
+            "Other",
+            "--room",
+            "Room",
+            "--save-as",
+        ])
+        .arg(&destination)
+        .arg(&file)
+        .assert()
+        .failure();
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(std::fs::read(&destination).unwrap(), b"untouched");
+
+    lox()
+        .args([
+            "config",
+            "add",
+            "--type",
+            "Mode",
+            "--title",
+            "evening",
+            "--save-as",
+        ])
+        .arg(&destination)
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "An operating mode named 'evening' already exists; nothing was changed.",
+        ));
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(std::fs::read(&destination).unwrap(), b"untouched");
+}
+
 subcmd_help!(help_ctx, "ctx");
 subcmd_help!(help_ctx_add, "ctx", "add");
 subcmd_help!(help_ctx_use, "ctx", "use");
@@ -84,6 +262,7 @@ subcmd_help!(help_completions, "completions");
 subcmd_help!(help_docs, "docs");
 subcmd_help!(help_schema, "schema");
 subcmd_help!(help_telemetry, "telemetry");
+subcmd_help!(help_report, "report");
 subcmd_help!(help_color, "color");
 subcmd_help!(help_color_encode, "color", "encode");
 subcmd_help!(help_color_decode, "color", "decode");
@@ -105,6 +284,362 @@ fn help_mentions_stats() {
         .assert()
         .success()
         .stdout(predicate::str::contains("  ls "));
+}
+
+mod reporting {
+    use super::*;
+    use serde_json::Value;
+
+    fn command() -> Command {
+        let mut command = lox();
+        command
+            .env("LOX_TELEMETRY", "0")
+            .args(["--quiet", "--json"]);
+        command
+    }
+
+    #[test]
+    fn agent_schema_advertises_the_actual_body_file_flag() {
+        let output = command()
+            .args(["schema", "report"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let schema: Value = serde_json::from_slice(&output).unwrap();
+        let args = schema["args"].as_array().unwrap();
+        let body_file = args.iter().find(|arg| arg["name"] == "body_file").unwrap();
+        assert_eq!(body_file["long"], "--body-file");
+    }
+
+    #[test]
+    fn dry_run_previews_inline_body_without_github_or_telemetry() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = command()
+            .env("PATH", dir.path())
+            .args([
+                "report",
+                "--title",
+                "Synthetic issue",
+                "--body",
+                "Repro steps",
+                "--dry-run",
+                "--trace-id",
+                "local-trace",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["dry_run"], true);
+        assert_eq!(result["repository"], "eisber/lox-cli");
+        assert_eq!(result["title"], "Synthetic issue");
+        assert!(result["body"].as_str().unwrap().starts_with("Repro steps"));
+        assert_eq!(result["telemetry_fallback_enabled"], false);
+        assert_eq!(result["trace_id"], "local-trace");
+    }
+
+    #[test]
+    fn report_accepts_file_or_stdin_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.txt");
+        let body = "Synthetic reproduction\nExpected 1, got 0";
+        std::fs::write(&path, body).unwrap();
+        for from_stdin in [false, true] {
+            let mut command = command();
+            command.args([
+                "report",
+                "--title",
+                "Synthetic issue",
+                "--dry-run",
+                "--body-file",
+            ]);
+            if from_stdin {
+                command.arg("-").write_stdin(body);
+            } else {
+                command.arg(&path);
+            }
+            let output = command.assert().success().get_output().stdout.clone();
+            let result: Value = serde_json::from_slice(&output).unwrap();
+            assert!(result["body"].as_str().unwrap().starts_with(body));
+        }
+    }
+
+    #[test]
+    fn missing_github_and_opt_out_returns_json_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = command()
+            .env("PATH", dir.path())
+            .args([
+                "report",
+                "--title",
+                "Synthetic issue",
+                "--body",
+                "Synthetic details",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["ok"], false);
+        let message = result["message"].as_str().unwrap();
+        assert!(message.contains("Cannot run GitHub CLI"));
+        assert!(message.contains("Telemetry is disabled"));
+        assert!(message.contains("No delivery was confirmed"));
+    }
+
+    #[test]
+    fn config_opt_out_does_not_require_connection_settings_or_active_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.yaml");
+        std::fs::write(&config, "telemetry: false\ncontexts: {}\n").unwrap();
+        let output = command()
+            .env_remove("LOX_TELEMETRY")
+            .env_remove("DO_NOT_TRACK")
+            .env("LOX_CONFIG", &config)
+            .env("PATH", dir.path())
+            .args([
+                "report",
+                "--title",
+                "Synthetic issue",
+                "--body",
+                "Synthetic details",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert!(
+            result["message"]
+                .as_str()
+                .unwrap()
+                .contains("Telemetry is disabled")
+        );
+        lox()
+            .env_remove("LOX_TELEMETRY")
+            .env_remove("DO_NOT_TRACK")
+            .env("LOX_CONFIG", &config)
+            .args(["telemetry", "status", "--quiet"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Effective:        disabled"));
+    }
+
+    #[test]
+    fn malformed_telemetry_settings_warn_and_disable_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.yaml");
+        std::fs::write(&config, "telemetry: [not a boolean]\n").unwrap();
+        command()
+            .env_remove("LOX_TELEMETRY")
+            .env_remove("DO_NOT_TRACK")
+            .env("LOX_CONFIG", &config)
+            .env("PATH", dir.path())
+            .args([
+                "report",
+                "--title",
+                "Synthetic issue",
+                "--body",
+                "Synthetic details",
+            ])
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("Telemetry is disabled"))
+            .stderr(predicate::str::contains(
+                "Cannot parse telemetry preference",
+            ));
+    }
+
+    #[test]
+    fn report_rejects_missing_conflicting_empty_or_unreadable_body() {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            vec![],
+            vec!["--body", "details", "--body-file", "-"],
+            vec!["--body", " \n"],
+        ] {
+            command()
+                .args(["report", "--title", "Synthetic issue", "--dry-run"])
+                .args(args)
+                .assert()
+                .failure();
+        }
+        command()
+            .args([
+                "report",
+                "--title",
+                "Synthetic issue",
+                "--dry-run",
+                "--body-file",
+            ])
+            .arg(dir.path().join("missing.txt"))
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("Cannot read issue report"));
+    }
+
+    #[test]
+    fn report_is_discoverable_without_advertising_legacy_nesting() {
+        lox()
+            .arg("--help")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("  report "))
+            .stdout(predicate::str::contains("feedback").not());
+        lox()
+            .args(["report", "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--body-file"))
+            .stdout(predicate::str::contains("GitHub issues are public"));
+        let output = command()
+            .arg("schema")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let schema: Value = serde_json::from_slice(&output).unwrap();
+        let names = schema["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|command| command["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"report"));
+        assert!(!names.contains(&"feedback"));
+        assert!(
+            schema["report_hint"]
+                .as_str()
+                .unwrap()
+                .contains("lox report --help")
+        );
+        for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+            lox()
+                .env("LOX_TELEMETRY", "0")
+                .args(["completions", shell, "--quiet"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("report"))
+                .stdout(predicate::str::contains("feedback").not());
+        }
+    }
+
+    #[test]
+    fn legacy_feedback_report_still_uses_the_canonical_handler() {
+        let output = command()
+            .args([
+                "feedback",
+                "report",
+                "--title",
+                "Synthetic issue",
+                "--body",
+                "Synthetic details",
+                "--dry-run",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert!(
+            result["body"]
+                .as_str()
+                .unwrap()
+                .contains("Reported via `lox report`")
+        );
+    }
+
+    #[test]
+    fn parameter_errors_return_json_and_reporting_guidance_for_each_output_spelling() {
+        for flags in [
+            vec!["--json"],
+            vec!["--output", "json"],
+            vec!["--output=json"],
+            vec!["-o", "json"],
+            vec!["-ojson"],
+            vec!["-qojson"],
+        ] {
+            let output = lox()
+                .env("LOX_TELEMETRY", "0")
+                .args(["color", "encode", "--brightness", "not-a-number"])
+                .args(flags)
+                .assert()
+                .code(2)
+                .stderr("")
+                .get_output()
+                .stdout
+                .clone();
+            let result: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(result["error"], "invalid_arguments");
+            assert_eq!(result["ok"], false);
+            assert!(result["message"].as_str().unwrap().contains("not-a-number"));
+            assert!(
+                result["report_hint"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Correct input/setup errors first")
+            );
+        }
+    }
+
+    #[test]
+    fn human_argument_errors_preserve_usage_and_hint_even_when_quiet() {
+        lox()
+            .args(["--quiet", "report", "--unknown-flag"])
+            .assert()
+            .code(2)
+            .stdout("")
+            .stderr(predicate::str::contains("unexpected argument"))
+            .stderr(predicate::str::contains("Usage:"))
+            .stderr(predicate::str::contains("lox report --help"));
+    }
+
+    #[test]
+    fn runtime_errors_include_guidance_in_json_and_human_output() {
+        let output = command()
+            .args(["color", "decode", "invalid"])
+            .assert()
+            .code(1)
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["ok"], false);
+        assert!(
+            result["report_hint"]
+                .as_str()
+                .unwrap()
+                .contains("lox report --help")
+        );
+        lox()
+            .env("LOX_TELEMETRY", "0")
+            .args(["--quiet", "color", "decode", "invalid"])
+            .assert()
+            .code(1)
+            .stdout("")
+            .stderr(predicate::str::contains("lox report --help"));
+    }
+
+    #[test]
+    fn help_and_version_are_not_json_errors() {
+        for flag in ["--help", "--version"] {
+            command()
+                .arg(flag)
+                .assert()
+                .success()
+                .stderr("")
+                .stdout(predicate::str::contains("\"ok\":false").not());
+        }
+    }
 }
 
 #[test]

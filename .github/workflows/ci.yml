@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  LOX_TELEMETRY: '0'
 
 jobs:
   lint:
@@ -87,6 +88,9 @@ jobs:
   package:
     name: Verify source packages
     runs-on: ubuntu-latest
+    env:
+      # Cargo's temporary registry must not reuse cached, same-version workspace sources.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.reverse-engineering/lox-package-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
 
@@ -108,10 +112,10 @@ jobs:
         run: cargo package --workspace --locked
 
       - name: Check package contents
-        run: python3 scripts/verify-packages.py target/package/*.crate
+        run: python3 scripts/verify-packages.py "$CARGO_TARGET_DIR"/package/*.crate
 
       - name: Test standalone simulator package
-        run: python3 scripts/test-simulator-package.py --package-dir target/package --work-dir .reverse-engineering/package-tests --target-dir target/package-tests
+        run: python3 scripts/test-simulator-package.py --package-dir "$CARGO_TARGET_DIR/package" --work-dir .reverse-engineering/package-tests --target-dir "$CARGO_TARGET_DIR/package-tests"
 
   coverage:
     name: Coverage

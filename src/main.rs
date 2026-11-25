@@ -11,8 +11,6 @@ mod ftp;
 mod gitops;
 mod loxcc;
 mod loxone_xml;
-#[allow(dead_code)]
-mod rc6;
 mod telemetry;
 #[allow(dead_code)]
 mod token;
@@ -22,7 +20,7 @@ mod ws;
 mod wsx;
 
 use anyhow::{Context, Result, bail};
-use clap::{ArgAction, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use dirs::home_dir;
 use serde_json::Value;
@@ -130,6 +128,7 @@ pub(crate) fn install_completions(shell: Shell, cmd: &mut clap::Command) -> Resu
     version,
     infer_subcommands = true,
     disable_help_subcommand = true,
+    after_help = errors::REPORT_HINT,
     help_template = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -141,6 +140,7 @@ Configuration:
   ctx                            Manage multiple Miniserver contexts
   config                         Loxone Config files (download/inspect/edit/push)
   telemetry                      Manage anonymous usage analytics
+  report                         Report CLI bugs (GitHub, then telemetry)
   completions                    Generate shell completions
   schema                         Command schema for AI agent discovery
   stats                          Miniserver statistics (ls/get/download)
@@ -214,6 +214,13 @@ pub(crate) enum Cmd {
     Telemetry {
         #[command(subcommand)]
         action: TelemetryCmd,
+    },
+    /// Report a CLI bug to GitHub, falling back to telemetry when enabled
+    Report(commands::report_cmd::ReportArgs),
+    #[command(hide = true)]
+    Feedback {
+        #[command(subcommand)]
+        action: commands::report_cmd::LegacyFeedbackCmd,
     },
     /// Download, inspect, and manage Loxone Config files
     Config {
@@ -430,7 +437,22 @@ pub(crate) enum SetupCmd {
 
 #[derive(Subcommand)]
 pub(crate) enum ConfigCmd {
-    /// Read-only LightController2 storage inspection (no GUI/runtime parity)
+    /// Inspect/reorder/remove CentralLight linked functions, not its controlled lights
+    CentralLight {
+        #[command(subcommand)]
+        action: commands::config_cmd::central_light::CentralLightCmd,
+    },
+    /// Inspect/reorder existing Status Monitor states (standalone local files only)
+    StatusMonitor {
+        #[command(subcommand)]
+        action: commands::config_cmd::status_monitor::StatusMonitorCmd,
+    },
+    /// Inspect/reorder the twelve existing Load Manager loads (local files only)
+    LoadManager {
+        #[command(subcommand)]
+        action: commands::config_cmd::load_manager::LoadManagerCmd,
+    },
+    /// Inspect LightController2 storage and make bounded validated mood edits
     Lighting {
         #[command(subcommand)]
         action: commands::config_cmd::lighting::LightingCmd,
@@ -749,6 +771,31 @@ pub(crate) enum ConfigCmd {
     },
     /// List automation/autopilot rules from a .Loxone config file
     AutopilotList { file: String },
+    /// Remove one existing action from a supported active AutopilotRule
+    AutopilotActionRemove {
+        file: String,
+        /// uuid:<exact stored native35 U> (8-4-4-16)
+        selector: String,
+        /// Zero-based existing action row (not an id or condition row)
+        #[arg(long)]
+        index: usize,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Reorder existing actions using the native original-target-index behavior
+    AutopilotActionMove {
+        file: String,
+        /// uuid:<exact stored native35 U> (8-4-4-16)
+        selector: String,
+        /// Zero-based source action row
+        #[arg(long)]
+        index: usize,
+        /// Original index of an existing target action; no append sentinel
+        #[arg(long)]
+        to_index: usize,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
     /// Add an autopilot rule to a .Loxone config file
     AutopilotAdd {
         file: String,
@@ -781,6 +828,230 @@ pub(crate) enum ConfigCmd {
         /// Output value during active period
         #[arg(long, default_value = "1")]
         value: String,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Add one ordinary Alarm Clock entry, then set its name and time
+    AlarmEntryAdd {
+        file: String,
+        selector: String,
+        /// Explicit name (the native localized default is not guessed)
+        #[arg(long)]
+        name: String,
+        /// Time of day, HH:MM or HH:MM:SS; equal existing times are not supported
+        #[arg(long)]
+        time: String,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Delete one configured Alarm Clock entry by its UUID, preserving the internal standard alarm
+    AlarmEntryRemove {
+        file: String,
+        selector: String,
+        /// Existing AlarmClock child's U, not its Id, display row, name or time
+        #[arg(long)]
+        entry_uuid: String,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Set one existing ordinary Alarm Clock entry's time, preserving its identity
+    AlarmEntrySetTime {
+        file: String,
+        selector: String,
+        /// Existing AlarmClock child's U, not its Id, display row, name or time
+        #[arg(long)]
+        entry_uuid: String,
+        /// HH:MM or HH:MM:SS (seconds extend native QTime/storage, not qualified GUI entry)
+        #[arg(long)]
+        time: String,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Rename or clear one Irrigation zone's stored name, preserving physical output identity
+    IrrigationZoneSetName {
+        file: String,
+        /// uuid:<exact-stored-native35-U> only (8-4-4-16); no RFC/name/room aliases
+        selector: String,
+        /// Native zero-based ioIdx (0..7), not the 1-based display row
+        #[arg(long)]
+        io_index: u8,
+        /// Nonempty, nonblank single-line Unicode name; duplicate names are allowed
+        #[arg(long, required_unless_present = "clear", conflicts_with = "clear")]
+        name: Option<String>,
+        /// Remove the stored name (not reset-to-default); native dialog opening may autofill it
+        #[arg(long, required_unless_present = "name")]
+        clear: bool,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Rename one existing ordinary Alarm Clock entry, preserving its identity and time
+    AlarmEntrySetName {
+        file: String,
+        selector: String,
+        /// Existing AlarmClock child's U, not its Id, display row, name or time
+        #[arg(long)]
+        entry_uuid: String,
+        /// Nonempty, nonblank single-line Unicode name; duplicate names are allowed
+        #[arg(long)]
+        name: String,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Set an existing ordinary Alarm Clock entry's Active checkbox
+    AlarmEntrySetActive {
+        file: String,
+        selector: String,
+        /// Existing AlarmClock child's U, not its Id, display row, name or time
+        #[arg(long)]
+        entry_uuid: String,
+        /// Enable the selected alarm entry
+        #[arg(
+            long,
+            required_unless_present = "no_active",
+            conflicts_with = "no_active"
+        )]
+        active: bool,
+        /// Disable the selected alarm entry
+        #[arg(long, required_unless_present = "active")]
+        no_active: bool,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Set one existing ordinary Alarm Clock entry's native per-mode checkbox
+    AlarmEntrySetMode {
+        file: String,
+        selector: String,
+        /// Existing AlarmClock child's U, not its Id, display row, name or time
+        #[arg(long)]
+        entry_uuid: String,
+        /// Zero-based Modes bit (0..9); native column = bit + 3, not a global mode Id
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=9))]
+        mode_bit: u8,
+        /// Check the selected mode bit (does not reactivate a disabled alarm)
+        #[arg(
+            long,
+            required_unless_present = "no_enabled",
+            conflicts_with = "no_enabled"
+        )]
+        enabled: bool,
+        /// Uncheck the selected mode bit; clearing the final bit is refused
+        #[arg(long, required_unless_present = "enabled")]
+        no_enabled: bool,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Delete one ordinary digital DayTimer entry by operating mode UUID and exact interval
+    TimerEntryRemove {
+        file: String,
+        selector: String,
+        /// Referenced operating mode UUID, NOT an entry UUID, ordinal or weekday mask
+        #[arg(long)]
+        mode_uuid: String,
+        #[arg(long, value_name = "HH:MM")]
+        from: String,
+        #[arg(long, value_name = "HH:MM")]
+        to: String,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Change only the To boundary of one existing ordinary digital DayTimer interval
+    TimerEntrySetEnd {
+        file: String,
+        selector: String,
+        /// Referenced operating mode UUID, NOT an entry UUID or weekday mask
+        #[arg(long)]
+        mode_uuid: String,
+        /// Existing interval start (unchanged)
+        #[arg(long, value_name = "HH:MM")]
+        from: String,
+        /// Existing interval end, used for exact selection
+        #[arg(long, value_name = "HH:MM")]
+        to: String,
+        /// New end after the unchanged start, up to 24:00; touching/overlap refused
+        #[arg(long, value_name = "HH:MM")]
+        new_to: String,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Change only the From boundary of one existing ordinary digital DayTimer interval
+    TimerEntrySetStart {
+        file: String,
+        selector: String,
+        /// Referenced operating mode UUID, NOT an entry UUID or weekday mask
+        #[arg(long)]
+        mode_uuid: String,
+        /// Existing interval start, used for exact selection
+        #[arg(long, value_name = "HH:MM")]
+        from: String,
+        /// Existing interval end (unchanged)
+        #[arg(long, value_name = "HH:MM")]
+        to: String,
+        /// New start from 00:00, before the unchanged end; touching/overlap refused
+        #[arg(long, value_name = "HH:MM")]
+        new_from: String,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Move one existing digital DayTimer interval with a fresh native Ctrl-up 15-minute drag
+    TimerEntryMove {
+        file: String,
+        selector: String,
+        /// Referenced operating mode UUID; the operating mode remains unchanged
+        #[arg(long)]
+        mode_uuid: String,
+        #[arg(long, value_name = "HH:MM")]
+        from: String,
+        #[arg(long, value_name = "HH:MM")]
+        to: String,
+        /// Signed pointer-minute delta from a From grab; linked clamp, then native grid snap
+        #[arg(long, allow_negative_numbers = true)]
+        shift_minutes: i32,
+        #[arg(short, long)]
+        room: Option<String>,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Set an existing ordinary digital DayTimer interval's Activation required checkbox
+    TimerEntrySetActivation {
+        file: String,
+        selector: String,
+        /// Referenced operating mode UUID, NOT an entry UUID, ordinal or weekday mask
+        #[arg(long)]
+        mode_uuid: String,
+        #[arg(long, value_name = "HH:MM")]
+        from: String,
+        #[arg(long, value_name = "HH:MM")]
+        to: String,
+        /// Require activation for the selected interval (not enable/disable)
+        #[arg(
+            long,
+            required_unless_present = "no_required",
+            conflicts_with = "no_required"
+        )]
+        required: bool,
+        /// Do not require activation for the selected interval
+        #[arg(long = "no-required", required_unless_present = "required")]
+        no_required: bool,
+        #[arg(short, long)]
+        room: Option<String>,
         #[arg(long)]
         save_as: Option<String>,
     },
@@ -838,7 +1109,7 @@ pub(crate) enum ConfigCmd {
         /// LightController2 selector (title or "uuid:...")
         selector: String,
     },
-    /// Set the color/brightness of a LightController2 mood (rewrites Qn)
+    /// Write raw packed mood Qn storage; --dry-run previews, never a mode-aware color/dimmer edit
     #[command(name = "set-mood-color")]
     SetMoodColor {
         /// Path to a .Loxone XML file
@@ -857,7 +1128,7 @@ pub(crate) enum ConfigCmd {
         #[arg(long)]
         save_as: Option<String>,
     },
-    /// Create a new mood (LightsceneC) on a LightController2
+    /// Create a mood with native-style IDs and 18 outputs; --dry-run previews with an ephemeral UUID
     #[command(name = "add-mood")]
     AddMood {
         /// Path to a .Loxone XML file
@@ -867,13 +1138,13 @@ pub(crate) enum ConfigCmd {
         /// Name for the new mood
         #[arg(long)]
         name: String,
-        /// Color: hsv(H,S,V), rgb(R,G,B), or a raw mood value
+        /// Q1 color: hsv(H,S,V), rgb(R,G,B), or a raw mood value
         #[arg(long)]
         color: String,
-        /// Override the scene id (SID); default = next free custom SID
+        /// Explicit SID; either ID override retains legacy partner allocation
         #[arg(long)]
         sid: Option<i64>,
-        /// Override the color id (CID); default = next free custom CID
+        /// Explicit CID; with no ID overrides use native automatic allocation
         #[arg(long)]
         cid: Option<i64>,
         #[arg(long)]
@@ -889,6 +1160,40 @@ pub(crate) enum ConfigCmd {
         /// New source connector UUID for OutputRef.AI (bare or "uuid:" prefixed)
         #[arg(long)]
         source: String,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Set native Inv on a supported existing unconnected digital input
+    SetInputInversion {
+        file: String,
+        /// Exact uuid:<native35-U> of a supported logic, latch, counter, delay, Monoflop or pulse owner
+        selector: String,
+        /// And/Or/Xor I1/I2, Not I, latch InputS/InputR, Counter/UpDownCounter Trigger, HourCounter/PulseGen InputEnable, delay/Monoflop/StairwayLS/OnPulseDelay InputTrigger
+        connector: String,
+        /// Invert the selected digital input
+        #[arg(
+            long,
+            required_unless_present = "no_inverted",
+            conflicts_with = "no_inverted"
+        )]
+        inverted: bool,
+        /// Clear inversion of the selected digital input
+        #[arg(long, required_unless_present = "inverted")]
+        no_inverted: bool,
+        #[arg(long)]
+        save_as: Option<String>,
+    },
+    /// Edit an existing ordinary analog VirtualIn Display format; preserves StateOnly
+    SetVirtualInputFormat {
+        file: String,
+        /// Exact uuid:<native35-U> of the existing VirtualIn
+        selector: String,
+        /// <v> or <v.0> through <v.3>, with an optional bounded literal unit suffix
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        format: Option<String>,
+        /// Clear Unit to empty (omitted on change), not a reset to a default
+        #[arg(long)]
+        clear: bool,
         #[arg(long)]
         save_as: Option<String>,
     },
@@ -1238,7 +1543,15 @@ fn categorize_error(e: &anyhow::Error) -> &'static str {
             404 => "not_found",
             _ => "http_error",
         }
-    } else if lower.contains("connection") || lower.contains("timeout") {
+    } else if matches!(
+        e.downcast_ref::<lox_core::runtime::ClockError>(),
+        Some(lox_core::runtime::ClockError::Transport {
+            kind: lox_core::runtime::TransportFailure::Body,
+            ..
+        })
+    ) || lower.contains("connection")
+        || lower.contains("timeout")
+    {
         "connection_error"
     } else {
         "error"
@@ -1246,37 +1559,35 @@ fn categorize_error(e: &anyhow::Error) -> &'static str {
 }
 
 /// Extract a privacy-safe command name from the CLI invocation (no arguments).
-fn command_name(cmd: &Cmd) -> String {
-    match cmd {
-        Cmd::Setup { .. } => "setup".into(),
-        Cmd::Cache { .. } => "cache".into(),
-        Cmd::Token { .. } => "token".into(),
-        Cmd::Telemetry { .. } => "telemetry".into(),
-        Cmd::Config { .. } => "config".into(),
-        Cmd::Ctx { .. } => "ctx".into(),
-        Cmd::Completions { .. } => "completions".into(),
-        Cmd::Schema { .. } => "schema".into(),
-        Cmd::Sim { .. } => "sim".into(),
-        Cmd::Blocks { .. } => "blocks".into(),
-        Cmd::Docs { .. } => "docs".into(),
-        Cmd::Color { .. } => "color".into(),
-        Cmd::Live { .. } => "live".into(),
-        Cmd::Stats { .. } => "stats".into(),
+fn command_name(mut matches: &clap::ArgMatches) -> String {
+    if matches.subcommand_name() == Some("feedback") {
+        return "report".into();
     }
+    let mut names = Vec::new();
+    while let Some((name, subcommand)) = matches.subcommand() {
+        names.push(name);
+        matches = subcommand;
+    }
+    names.join(" ")
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() {
-    let cli = Cli::parse();
+    telemetry::prepare_error_backtraces();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let requested_json = errors::json_output_requested(&args[1..]);
+    errors::install_panic_hook(requested_json);
+    let matches = Cli::command()
+        .try_get_matches_from(args)
+        .unwrap_or_else(|error| errors::exit_argument_error(error, requested_json));
+    let command = command_name(&matches);
+    let cli = Cli::from_arg_matches(&matches)
+        .unwrap_or_else(|error| errors::exit_argument_error(error, requested_json));
     let json = cli.output == OutputFormat::Json || cli.json_flag;
-    if let Err(e) = run(cli) {
+    if let Err(e) = run(cli, &command) {
         if json {
-            let mut envelope = serde_json::json!({
-                "ok": false,
-                "error": categorize_error(&e),
-                "message": format!("{:#}", e),
-            });
+            let mut envelope = errors::error_envelope(categorize_error(&e), &format!("{:#}", e));
             if let Some(diagnostic) = e.downcast_ref::<config_edit::schema::Diagnostic>() {
                 envelope["error"] = serde_json::json!(diagnostic.code);
                 envelope["diagnostics"] = serde_json::json!([diagnostic]);
@@ -1289,21 +1600,22 @@ fn main() {
             );
         } else {
             eprintln!("Error: {:#}", e);
+            eprintln!("\n{}", errors::REPORT_HINT);
         }
         std::process::exit(1);
     }
 }
 
-fn run(cli: Cli) -> Result<()> {
-    dry_run::dispatch(cli, run_command)
+fn run(cli: Cli, command: &str) -> Result<()> {
+    dry_run::dispatch(cli, |cli| run_command(cli, command))
 }
 
-fn run_command(cli: Cli) -> Result<()> {
+fn run_command(cli: Cli, command: &str) -> Result<()> {
     // Set context override before any Config::load() calls
     config::set_ctx_override(cli.context.clone());
 
     client::set_verbose(cli.verbose);
-    let ctx = commands::RunContext {
+    let mut ctx = commands::RunContext {
         json: cli.output == OutputFormat::Json || cli.json_flag,
         quiet: cli.quiet,
         csv: cli.output == OutputFormat::Csv,
@@ -1311,6 +1623,7 @@ fn run_command(cli: Cli) -> Result<()> {
         no_header: cli.no_header,
         non_interactive: cli.non_interactive,
         trace_id: cli.trace_id.clone(),
+        telemetry: None,
     };
 
     if let Some(tid) = &ctx.trace_id
@@ -1325,18 +1638,38 @@ fn run_command(cli: Cli) -> Result<()> {
         unsafe { std::env::set_var("NO_COLOR", "1") };
     }
 
+    let telemetry_preference = match config::Config::telemetry_preference() {
+        Ok(preference) => preference,
+        Err(error) => {
+            eprintln!(
+                "Warning: {error:#}. Telemetry defaults to disabled unless LOX_TELEMETRY overrides it."
+            );
+            Some(false)
+        }
+    };
     // Telemetry creates local markers/session files as well as sending events.
-    if !ctx.dry_run {
+    if !ctx.dry_run
+        && !matches!(
+            &cli.cmd,
+            Cmd::Telemetry {
+                action: TelemetryCmd::Disable
+            }
+        )
+    {
         if !ctx.quiet {
             telemetry::maybe_show_first_run_notice();
         }
-        let telem = telemetry::Telemetry::from_config(
-            config::Config::load().ok().and_then(|c| c.telemetry),
-        );
-        telem.track_command(&command_name(&cli.cmd));
+        let telem = telemetry::Telemetry::from_config(telemetry_preference);
+        ctx.telemetry = Some(std::cell::RefCell::new(telem));
     }
 
-    match cli.cmd {
+    if let Some(telemetry) = &ctx.telemetry {
+        telemetry
+            .borrow()
+            .install_panic_hook(command, std::time::Instant::now());
+    }
+    let started = std::time::Instant::now();
+    let result = match cli.cmd {
         // ── Configuration commands ────────────────────────────────────
         Cmd::Setup { action } => commands::config_cmd::cmd_setup(&ctx, action),
         Cmd::Cache { action } => commands::config_cmd::cmd_cache(&ctx, action),
@@ -1346,6 +1679,17 @@ fn run_command(cli: Cli) -> Result<()> {
             TelemetryCmd::Disable => telemetry::cmd_telemetry_disable(),
             TelemetryCmd::Status => telemetry::cmd_telemetry_status(),
         },
+        Cmd::Report(args)
+        | Cmd::Feedback {
+            action: commands::report_cmd::LegacyFeedbackCmd::Report(args),
+        } => {
+            if let Some(telemetry) = &ctx.telemetry {
+                commands::report_cmd::cmd_report(&ctx, args, &telemetry.borrow())
+            } else {
+                let preview_telemetry = telemetry::Telemetry::from_config(telemetry_preference);
+                commands::report_cmd::cmd_report(&ctx, args, &preview_telemetry)
+            }
+        }
         Cmd::Config { action } => commands::config_cmd::cmd_config(&ctx, *action),
         Cmd::Ctx { action } => commands::ctx::cmd_ctx(&ctx, action),
         Cmd::Completions { shell, install } => {
@@ -1363,7 +1707,25 @@ fn run_command(cli: Cli) -> Result<()> {
         Cmd::Color { action } => commands::color_cmd::cmd_color(&ctx, action),
         Cmd::Live { action } => commands::live_cmd::cmd_live(&ctx, action),
         Cmd::Stats { action } => commands::stats_cmd::cmd_stats(&ctx, action),
-    }
+    };
+    let duration = started.elapsed();
+    ctx.track_telemetry(|telemetry| {
+        telemetry.track_command(
+            command,
+            result.as_ref().err().map(categorize_error),
+            duration,
+        );
+        if let Err(error) = &result {
+            telemetry.track_exception(
+                command,
+                categorize_error(error),
+                true,
+                error.backtrace(),
+                duration,
+            );
+        }
+    });
+    result
 }
 
 // ── Schema introspection ─────────────────────────────────────────────────────
@@ -1382,7 +1744,9 @@ pub(crate) fn build_schema(filter: Option<&str>) -> Result<Value> {
                 name
             );
         };
-        return Ok(describe_command(sub, true));
+        let mut schema = describe_command(sub, true);
+        schema["report_hint"] = serde_json::json!(errors::REPORT_HINT);
+        return Ok(schema);
     }
 
     let commands: Vec<Value> = cmd
@@ -1395,6 +1759,7 @@ pub(crate) fn build_schema(filter: Option<&str>) -> Result<Value> {
         "name": "lox",
         "version": env!("CARGO_PKG_VERSION"),
         "description": "Loxone Config-as-Code CLI",
+        "report_hint": errors::REPORT_HINT,
         "global_flags": [
             {"name": "--output", "short": "-o", "type": "enum", "values": ["table", "json", "csv"], "default": "table"},
             {"name": "--quiet", "short": "-q", "type": "bool", "description": "Suppress non-essential output"},
@@ -1426,8 +1791,8 @@ pub(crate) fn describe_command(cmd: &clap::Command, _detailed: bool) -> Value {
             if let Some(short) = a.get_short() {
                 arg["short"] = Value::String(format!("-{}", short));
             }
-            if a.get_long().is_some() {
-                arg["long"] = Value::String(format!("--{}", a.get_id()));
+            if let Some(long) = a.get_long() {
+                arg["long"] = Value::String(format!("--{}", long));
             }
             if a.get_num_args().is_some_and(|r| r.max_values() == 0) {
                 arg["type"] = Value::String("bool".to_string());
@@ -1903,6 +2268,63 @@ mod tests {
     use super::*;
     use client::is_uuid;
 
+    #[test]
+    fn telemetry_command_names_exclude_private_arguments_and_normalize_aliases() {
+        run_with_large_stack(|| {
+            for (args, expected) in [
+                (
+                    vec![
+                        "lox",
+                        "--ctx",
+                        "private-context",
+                        "config",
+                        "validate",
+                        "private.Loxone",
+                    ],
+                    "config validate",
+                ),
+                (vec!["lox", "config", "list"], "config ls"),
+                (
+                    vec![
+                        "lox",
+                        "report",
+                        "--title",
+                        "Synthetic",
+                        "--body",
+                        "Synthetic",
+                    ],
+                    "report",
+                ),
+                (
+                    vec![
+                        "lox",
+                        "feedback",
+                        "report",
+                        "--title",
+                        "Synthetic",
+                        "--body",
+                        "Synthetic",
+                    ],
+                    "report",
+                ),
+                (
+                    vec![
+                        "lox",
+                        "config",
+                        "room",
+                        "add",
+                        "private.Loxone",
+                        "Private Room",
+                    ],
+                    "config room add",
+                ),
+            ] {
+                let matches = Cli::command().try_get_matches_from(args).unwrap();
+                assert_eq!(command_name(&matches), expected);
+            }
+        });
+    }
+
     fn run_with_large_stack<F: FnOnce() + Send + 'static>(f: F) {
         std::thread::Builder::new()
             .stack_size(8 * 1024 * 1024)
@@ -1963,6 +2385,27 @@ mod tests {
                 "bash completions should define _lox function"
             );
         });
+    }
+
+    #[test]
+    fn test_autopilot_action_structure_cli() {
+        for operation in ["autopilot-action-remove", "autopilot-action-move"] {
+            let mut args = vec![
+                "lox",
+                "config",
+                operation,
+                "input.Loxone",
+                "uuid:owner",
+                "--index",
+                "0",
+            ];
+            if operation == "autopilot-action-move" {
+                args.extend(["--to-index", "2"]);
+            }
+            if let Err(error) = Cli::try_parse_from(args) {
+                panic!("{operation}: {error}");
+            }
+        }
     }
 
     #[test]

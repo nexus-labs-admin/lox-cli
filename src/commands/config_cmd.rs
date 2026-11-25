@@ -3,16 +3,22 @@ use clap::CommandFactory;
 use clap_complete::generate;
 use reqwest::blocking::Client;
 use std::fs;
+use std::io::Write;
 use std::time::Duration;
 
+pub(crate) mod central_light;
 pub(crate) mod energy;
 pub(crate) mod lighting;
+pub(crate) mod load_manager;
+pub(crate) mod status_monitor;
 
 use crate::client::{LOXONE_EPOCH_SECS, LoxClient, USER_AGENT};
 use crate::commands::RunContext;
 use crate::config::Config;
 use crate::config_edit::{
-    ConfigEditor, PermissionChange, PermissionEdit, PrincipalKind, VirtualInOpts,
+    ConfigEditor, ControlMovePreview, PermissionChange, PermissionEdit, PrincipalKind,
+    PrincipalPermissions, RoomAddPreview, RoomRenamePreview, SpliceActorPreview, VirtualInOpts,
+    principal_permissions_error,
 };
 use crate::custom_overlay;
 use crate::token;
@@ -28,6 +34,135 @@ fn emit_json(ctx: &RunContext, mut obj: serde_json::Value) {
         obj["trace_id"] = serde_json::Value::String(tid.clone());
     }
     println!("{}", obj);
+}
+
+fn edit_autopilot_action(
+    ctx: &RunContext,
+    file: &str,
+    selector: &str,
+    index: usize,
+    to_index: Option<usize>,
+    save_as: Option<&str>,
+) -> Result<()> {
+    let data = fs::read(file).with_context(|| format!("Cannot read {file}"))?;
+    let (output, change) = ConfigEditor::edit_autopilot_action(&data, selector, index, to_index)?;
+    if change.changed || save_as.is_some() {
+        write_edited_bytes(&output, file, save_as, ctx.quiet || ctx.json || ctx.csv)?;
+    }
+    if ctx.json {
+        emit_json(
+            ctx,
+            serde_json::json!({
+                "ok": true,
+                "saved_to": save_as.unwrap_or(file),
+                "action_change": change,
+            }),
+        );
+    } else if ctx.csv {
+        if !ctx.no_header {
+            println!("BLOCK_UUID,INDEX,TO_INDEX,REMAINING_ACTIONS,INVALID,CHANGED");
+        }
+        println!(
+            "{},{},{},{},{},{}",
+            change.block_uuid,
+            change.index,
+            change
+                .to_index
+                .map(|index| index.to_string())
+                .unwrap_or_default(),
+            change.remaining_actions,
+            change.invalid,
+            change.changed,
+        );
+    } else if !ctx.quiet {
+        println!(
+            "✓ Autopilot action {index}: {} ({} remaining{})",
+            to_index.map_or_else(|| "removed".into(), |target| format!("row {target}")),
+            change.remaining_actions,
+            if change.changed { "" } else { ", unchanged" },
+        );
+    }
+    Ok(())
+}
+
+fn print_splice_preview(ctx: &RunContext, preview: &SpliceActorPreview) -> Result<()> {
+    let fields = [
+        ("SELECTED", serde_json::to_string(&preview.selected)?),
+        ("ACTOR", serde_json::to_string(&preview.actor)?),
+        ("OUTPUTREF", serde_json::to_string(&preview.outputref)?),
+        (
+            "SOURCE_REQUESTED",
+            serde_json::to_string(&preview.source_requested)?,
+        ),
+        (
+            "SOURCE_STORED",
+            serde_json::to_string(&preview.source_stored)?,
+        ),
+        (
+            "SOURCE_IS_OUTPUT",
+            serde_json::to_string(&preview.source_is_output)?,
+        ),
+        ("SOURCE_PAGE", serde_json::to_string(&preview.source_page)?),
+        (
+            "CONNECTOR_PATH",
+            serde_json::to_string(&preview.connector_path)?,
+        ),
+        (
+            "BEFORE_CONNECTOR",
+            serde_json::to_string(&preview.before_connector)?,
+        ),
+        (
+            "AFTER_CONNECTOR",
+            serde_json::to_string(&preview.after_connector)?,
+        ),
+        (
+            "BEFORE_REFERENCES",
+            serde_json::to_string(&preview.before_references)?,
+        ),
+        (
+            "AFTER_REFERENCES",
+            serde_json::to_string(&preview.after_references)?,
+        ),
+        ("BEFORE_NIO", serde_json::to_string(&preview.before_nio)?),
+        ("AFTER_NIO", serde_json::to_string(&preview.after_nio)?),
+        ("CONNECTOR_CREATED", preview.connector_created.to_string()),
+        (
+            "CONNECTOR_UUID_EPHEMERAL",
+            preview.connector_uuid_ephemeral.to_string(),
+        ),
+        ("SCOPE", preview.scope.to_owned()),
+    ];
+    if ctx.csv {
+        if !ctx.no_header {
+            println!(
+                "{}",
+                fields
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
+        println!(
+            "{}",
+            fields
+                .iter()
+                .map(|(_, value)| format!("\"{}\"", value.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    } else {
+        if !ctx.no_header {
+            println!("SPLICE PREVIEW  FIELD  STORED/PLANNED VALUE");
+        }
+        for (key, value) in fields {
+            println!("{key}  {value}");
+        }
+        if !ctx.quiet {
+            println!("\nAI references replaced, not appended; dry-run wrote no files");
+        }
+    }
+    Ok(())
 }
 
 pub fn cmd_setup(ctx: &RunContext, action: SetupCmd) -> Result<()> {
@@ -355,7 +490,10 @@ pub fn cmd_token(ctx: &RunContext, action: TokenCmd) -> Result<()> {
 
 pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
     match action {
+        ConfigCmd::CentralLight { action } => central_light::run(ctx, action)?,
         ConfigCmd::Energy { action } => energy::run(ctx, action)?,
+        ConfigCmd::LoadManager { action } => load_manager::run(ctx, action)?,
+        ConfigCmd::StatusMonitor { action } => status_monitor::run(ctx, action)?,
         ConfigCmd::Lighting { action } => lighting::run(ctx, action)?,
         ConfigCmd::Ls => {
             let cfg = Config::load()?;
@@ -419,7 +557,8 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
         ConfigCmd::Extract { file, save_as } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             eprintln!("Extracting config archive...");
-            let xml = loxcc::extract_and_decompress(&data)?;
+            let xml = lox_core::configuration::archive::extract_and_decompress(&data)
+                .map_err(loxcc::archive_error)?;
             let xml_path = save_as.unwrap_or_else(|| {
                 file.strip_suffix(".zip").unwrap_or(&file).to_string() + ".Loxone"
             });
@@ -845,7 +984,7 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
         }
         ConfigCmd::Compress { file, save_as } => {
             let xml = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
-            let loxcc_data = loxcc::compress_loxcc(&xml);
+            let loxcc_data = lox_core::configuration::archive::compress_loxcc(&xml);
             let out_path = save_as.unwrap_or_else(|| {
                 file.strip_suffix(".Loxone")
                     .or_else(|| file.strip_suffix(".loxone"))
@@ -1427,6 +1566,44 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             grant,
             save_as,
         } => {
+            if matches!(control_type.as_str(), "operating-mode" | "Mode") {
+                if room.is_some()
+                    || category.is_some()
+                    || parent.is_some()
+                    || page.is_some()
+                    || device.is_some()
+                    || topic.is_some()
+                    || analog
+                    || min.is_some()
+                    || max.is_some()
+                    || unit.is_some()
+                    || grant.is_some()
+                {
+                    bail!(
+                        "Global operating modes support only --title and --save-as, not page/device/room/I/O options; nothing was changed."
+                    );
+                }
+                let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
+                let (output, added) = ConfigEditor::add_operating_mode(&data, &title)?;
+                write_edited_bytes(&output, &file, save_as.as_deref(), ctx.quiet || ctx.json)?;
+                if ctx.json {
+                    emit_json(
+                        ctx,
+                        serde_json::json!({
+                            "ok": true, "type": "Mode", "added": {
+                                "uuid": added.uuid, "mode": added.mode, "title": added.title,
+                                "input_uuid": added.input_uuid, "output_uuid": added.output_uuid,
+                            }
+                        }),
+                    );
+                } else if !ctx.quiet {
+                    println!(
+                        "✓ Added operating mode '{}' (Mode: {}, UUID: {})",
+                        title, added.mode, added.uuid
+                    );
+                }
+                return Ok(());
+            }
             let is_virtual_input =
                 matches!(control_type.as_str(), "virtual-input" | "virtual-in" | "vi");
             if grant.is_some() && !is_virtual_input {
@@ -1461,6 +1638,7 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
                     None => None,
                 };
                 save_edited_with_quiet(&mut editor, &file, save_as.as_deref(), ctx.quiet)?;
+                ctx.track_telemetry(|telemetry| telemetry.track_block_created("VirtualIn"));
                 if ctx.json {
                     let mut obj = serde_json::json!({
                         "ok": true,
@@ -1918,6 +2096,7 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
                 }
             }
             save_edited(&mut editor, &file, save_as.as_deref())?;
+            ctx.track_telemetry(|telemetry| telemetry.track_block_created(xml_type));
         }
         ConfigCmd::Validate { file } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
@@ -2023,6 +2202,7 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
                     file
                 );
             }
+            ctx.track_telemetry(|telemetry| telemetry.track_check_result(ok, warn, err));
             if err > 0 {
                 anyhow::bail!("{} error(s) found in config check", err);
             }
@@ -2038,6 +2218,7 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
 
             let issues = findings.iter().filter(|f| f.starts_with('✗')).count();
             let warnings = findings.iter().filter(|f| f.starts_with('⚠')).count();
+            ctx.track_telemetry(|telemetry| telemetry.track_scan_result(issues, warnings));
 
             if issues == 0 && warnings == 0 {
                 println!("\n✓ No PII or secrets found — safe to commit");
@@ -2130,8 +2311,13 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
         }
         ConfigCmd::UserPerms { file, user, group } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
-            let editor = ConfigEditor::load(&data)?;
-            let perms = editor.principal_permissions(&user, principal_kind(group))?;
+            let perms = lox_core::configuration::editor::principal_permissions(
+                &data,
+                &user,
+                principal_kind(group),
+            )
+            .map(PrincipalPermissions::from)
+            .map_err(principal_permissions_error)?;
             if ctx.json {
                 emit_json(ctx, serde_json::to_value(&perms)?);
             } else if ctx.csv {
@@ -2183,6 +2369,26 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             println!("{}", msg);
             save_edited(&mut editor, &file, save_as.as_deref())?;
         }
+        ConfigCmd::AutopilotActionRemove {
+            file,
+            selector,
+            index,
+            save_as,
+        } => edit_autopilot_action(ctx, &file, &selector, index, None, save_as.as_deref())?,
+        ConfigCmd::AutopilotActionMove {
+            file,
+            selector,
+            index,
+            to_index,
+            save_as,
+        } => edit_autopilot_action(
+            ctx,
+            &file,
+            &selector,
+            index,
+            Some(to_index),
+            save_as.as_deref(),
+        )?,
         ConfigCmd::AutopilotList { file } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let controls = loxone_xml::parse_controls(&data, Some("AutoPilot"), None)?;
@@ -2273,6 +2479,778 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             );
             save_edited(&mut editor, &file, save_as.as_deref())?;
         }
+        ConfigCmd::AlarmEntryAdd {
+            file,
+            selector,
+            name,
+            time,
+            room,
+            save_as,
+        } => {
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let mut editor = ConfigEditor::load(&data)?;
+            let added = editor.add_alarm_clock_entry(&selector, &name, &time)?;
+            save_edited_with_quiet(
+                &mut editor,
+                &file,
+                save_as.as_deref(),
+                ctx.quiet || ctx.json || ctx.csv,
+            )?;
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "added": added,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,ENTRY_UUID,ID,NAME,TIME_SECONDS,ACTIVE,MODES,TOTAL_ENTRIES"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},\"{}\",{},{},{},{}",
+                    added.block_uuid.replace('"', "\"\""),
+                    added.entry_uuid,
+                    added.id,
+                    added.name.replace('"', "\"\""),
+                    added.time_seconds,
+                    added.active,
+                    added.modes,
+                    added.total_entries,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Added Alarm Clock entry '{}' at {time} (UUID: {})",
+                    name, added.entry_uuid
+                );
+            }
+        }
+        ConfigCmd::AlarmEntryRemove {
+            file,
+            selector,
+            entry_uuid,
+            room,
+            save_as,
+        } => {
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let mut editor = ConfigEditor::load(&data)?;
+            let removed = editor.remove_alarm_clock_entry(&selector, &entry_uuid)?;
+            save_edited_with_quiet(
+                &mut editor,
+                &file,
+                save_as.as_deref(),
+                ctx.quiet || ctx.json || ctx.csv,
+            )?;
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "removed": removed,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!("BLOCK_UUID,ENTRY_UUID,STORED_ENTRY_UUID,REMAINING_ENTRIES");
+                }
+                println!(
+                    "\"{}\",{},{},{}",
+                    removed.block_uuid.replace('"', "\"\""),
+                    removed.entry_uuid,
+                    removed.stored_entry_uuid,
+                    removed.remaining_entries,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Removed Alarm Clock entry {entry_uuid}; {} entries remain (including the standard alarm)",
+                    removed.remaining_entries
+                );
+            }
+        }
+        ConfigCmd::AlarmEntrySetTime {
+            file,
+            selector,
+            entry_uuid,
+            time,
+            room,
+            save_as,
+        } => {
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let mut editor = ConfigEditor::load(&data)?;
+            let change = editor.set_alarm_clock_entry_time(&selector, &entry_uuid, &time)?;
+            let quiet = ctx.quiet || ctx.json || ctx.csv;
+            if change.changed {
+                save_edited_with_quiet(&mut editor, &file, save_as.as_deref(), quiet)?;
+            } else if save_as.is_some() {
+                write_edited_bytes(&data, &file, save_as.as_deref(), quiet)?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "time_change": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,ENTRY_UUID,STORED_ENTRY_UUID,PREVIOUS_TIME_SECONDS,TIME_SECONDS,CHANGED"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},{},{},{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry_uuid,
+                    change.stored_entry_uuid,
+                    change.previous_time_seconds,
+                    change.time_seconds,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Alarm Clock entry {entry_uuid}: Time = {time} ({} seconds, {})",
+                    change.time_seconds,
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
+        ConfigCmd::IrrigationZoneSetName {
+            file,
+            selector,
+            io_index,
+            name,
+            clear,
+            save_as,
+        } => {
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let (output, change) = match (name.as_deref(), clear) {
+                (Some(name), false) => {
+                    ConfigEditor::edit_irrigation_zone_name(&data, &selector, io_index, name)?
+                }
+                (None, true) => {
+                    ConfigEditor::clear_irrigation_zone_name(&data, &selector, io_index)?
+                }
+                _ => bail!("Choose exactly one of --name or --clear; nothing was changed."),
+            };
+            let quiet = ctx.quiet || ctx.json || ctx.csv;
+            if change.changed || save_as.is_some() {
+                write_edited_bytes(&output, &file, save_as.as_deref(), quiet)?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "name_change": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!("BLOCK_UUID,IO_INDEX,PREVIOUS_NAME,NAME,CHANGED");
+                }
+                println!(
+                    "\"{}\",{},\"{}\",\"{}\",{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.io_index,
+                    change.previous_name.replace('"', "\"\""),
+                    change.name.replace('"', "\"\""),
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Irrigation io-index {io_index}: stored name = '{}' ({})",
+                    change.name,
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
+        ConfigCmd::AlarmEntrySetName {
+            file,
+            selector,
+            entry_uuid,
+            name,
+            room,
+            save_as,
+        } => {
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let (output, change) =
+                ConfigEditor::edit_alarm_clock_entry_name(&data, &selector, &entry_uuid, &name)?;
+            let quiet = ctx.quiet || ctx.json || ctx.csv;
+            if change.changed || save_as.is_some() {
+                write_edited_bytes(&output, &file, save_as.as_deref(), quiet)?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "name_change": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!("BLOCK_UUID,ENTRY_UUID,STORED_ENTRY_UUID,PREVIOUS_NAME,NAME,CHANGED");
+                }
+                println!(
+                    "\"{}\",{},{},\"{}\",\"{}\",{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry_uuid,
+                    change.stored_entry_uuid,
+                    change
+                        .previous_name
+                        .as_deref()
+                        .unwrap_or("")
+                        .replace('"', "\"\""),
+                    change.name.replace('"', "\"\""),
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Alarm Clock entry {entry_uuid}: Name = '{name}' ({})",
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
+        ConfigCmd::AlarmEntrySetActive {
+            file,
+            selector,
+            entry_uuid,
+            active,
+            no_active: _,
+            room,
+            save_as,
+        } => {
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let mut editor = ConfigEditor::load(&data)?;
+            let change = editor.set_alarm_clock_entry_active(&selector, &entry_uuid, active)?;
+            let quiet = ctx.quiet || ctx.json || ctx.csv;
+            if change.changed {
+                save_edited_with_quiet(&mut editor, &file, save_as.as_deref(), quiet)?;
+            } else if save_as.is_some() {
+                write_edited_bytes(&data, &file, save_as.as_deref(), quiet)?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "activation": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,ENTRY_UUID,STORED_ENTRY_UUID,PREVIOUS_ACTIVE,ACTIVE,CHANGED"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},{},{},{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry_uuid,
+                    change.stored_entry_uuid,
+                    change.previous_active,
+                    change.active,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Alarm Clock entry {entry_uuid}: Active = {active} ({})",
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
+        ConfigCmd::AlarmEntrySetMode {
+            file,
+            selector,
+            entry_uuid,
+            mode_bit,
+            enabled,
+            no_enabled: _,
+            room,
+            save_as,
+        } => {
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let mut editor = ConfigEditor::load(&data)?;
+            let change =
+                editor.set_alarm_clock_entry_mode(&selector, &entry_uuid, mode_bit, enabled)?;
+            let quiet = ctx.quiet || ctx.json || ctx.csv;
+            if change.changed {
+                save_edited_with_quiet(&mut editor, &file, save_as.as_deref(), quiet)?;
+            } else if save_as.is_some() {
+                write_edited_bytes(&data, &file, save_as.as_deref(), quiet)?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "mode_change": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,ENTRY_UUID,STORED_ENTRY_UUID,MODE_BIT,PREVIOUS_ENABLED,ENABLED,PREVIOUS_MODES,MODES,ACTIVE,CHANGED"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},{},{},{},{},{},{},{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry_uuid,
+                    change.stored_entry_uuid,
+                    change.mode_bit,
+                    change.previous_enabled,
+                    change.enabled,
+                    change.previous_modes,
+                    change.modes,
+                    change.active,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Alarm Clock entry {entry_uuid}: mode bit {mode_bit} = {enabled}, Modes = {}, Active = {} ({})",
+                    change.modes,
+                    change.active,
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
+        ConfigCmd::TimerEntryRemove {
+            file,
+            selector,
+            mode_uuid,
+            from,
+            to,
+            room,
+            save_as,
+        } => {
+            let identity =
+                crate::config_edit::daytimer::DayTimerEntryIdentity::parse(&mode_uuid, &from, &to)?;
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let mut editor = ConfigEditor::load(&data)?;
+            let removed = editor
+                .remove_daytimer_entry_legacy(
+                    &selector,
+                    &identity.mode_uuid,
+                    identity.from_minutes,
+                    identity.to_minutes,
+                )
+                .map_err(crate::config_edit::daytimer::daytimer_removal_error)?;
+            save_edited_with_quiet(
+                &mut editor,
+                &file,
+                save_as.as_deref(),
+                ctx.quiet || ctx.json || ctx.csv,
+            )?;
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "removed": {
+                            "block_uuid": removed.block_uuid,
+                            "entry": identity,
+                            "stored_mode_uuid": removed.stored_mode_uuid,
+                            "removed_attributes": removed.removed_attributes,
+                            "remaining_entries": removed.remaining_entries,
+                        },
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,MODE_UUID,STORED_MODE_UUID,FROM_MINUTES,TO_MINUTES,REMAINING_ENTRIES"
+                    );
+                }
+                println!(
+                    "{},{},{},{},{},{}",
+                    format_args!("\"{}\"", removed.block_uuid.replace('"', "\"\"")),
+                    removed.requested_mode_uuid,
+                    removed.stored_mode_uuid,
+                    removed.from_minutes,
+                    removed.to_minutes,
+                    removed.remaining_entries,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ Removed DayTimer entry {from}-{to} for mode {mode_uuid}; {} entries remain",
+                    removed.remaining_entries
+                );
+            }
+        }
+        ConfigCmd::TimerEntrySetEnd {
+            file,
+            selector,
+            mode_uuid,
+            from,
+            to,
+            new_to,
+            room,
+            save_as,
+        } => {
+            let identity =
+                crate::config_edit::daytimer::DayTimerEntryIdentity::parse(&mode_uuid, &from, &to)?;
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let (output, change) =
+                ConfigEditor::edit_daytimer_entry_end(&data, &selector, identity, &new_to)?;
+            if change.changed || save_as.is_some() {
+                write_edited_bytes(
+                    &output,
+                    &file,
+                    save_as.as_deref(),
+                    ctx.quiet || ctx.json || ctx.csv,
+                )?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "time_change": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,MODE_UUID,STORED_MODE_UUID,FROM_MINUTES,PREVIOUS_TO_MINUTES,NEW_TO_MINUTES,CHANGED"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},{},{},{},{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry.mode_uuid,
+                    change.stored_mode_uuid,
+                    change.entry.from_minutes,
+                    change.entry.to_minutes,
+                    change.new_to_minutes,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ DayTimer entry {from}-{to} for mode {mode_uuid}: To = {new_to} ({})",
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
+        ConfigCmd::TimerEntrySetStart {
+            file,
+            selector,
+            mode_uuid,
+            from,
+            to,
+            new_from,
+            room,
+            save_as,
+        } => {
+            let identity =
+                crate::config_edit::daytimer::DayTimerEntryIdentity::parse(&mode_uuid, &from, &to)?;
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let (output, change) =
+                ConfigEditor::edit_daytimer_entry_start(&data, &selector, identity, &new_from)?;
+            if let Some(destination) = &save_as
+                && let (Ok(input), Ok(destination)) = (
+                    std::path::Path::new(&file).canonicalize(),
+                    std::path::Path::new(destination).canonicalize(),
+                )
+                && input == destination
+            {
+                bail!(
+                    "The save-as destination aliases the input; choose a different output path. Nothing was changed."
+                );
+            }
+            let saved_to = if change.changed || save_as.is_some() {
+                write_edited_bytes(
+                    &output,
+                    &file,
+                    save_as.as_deref(),
+                    ctx.quiet || ctx.json || ctx.csv,
+                )?;
+                Some(save_as.as_deref().unwrap_or(&file))
+            } else {
+                None
+            };
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": saved_to,
+                        "time_change": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,MODE_UUID,STORED_MODE_UUID,PREVIOUS_FROM_MINUTES,TO_MINUTES,NEW_FROM_MINUTES,CHANGED"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},{},{},{},{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry.mode_uuid,
+                    change.stored_mode_uuid,
+                    change.entry.from_minutes,
+                    change.entry.to_minutes,
+                    change.new_from_minutes,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ DayTimer entry {from}-{to} for mode {mode_uuid}: From = {new_from} ({})",
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
+        ConfigCmd::TimerEntryMove {
+            file,
+            selector,
+            mode_uuid,
+            from,
+            to,
+            shift_minutes,
+            room,
+            save_as,
+        } => {
+            let identity =
+                crate::config_edit::daytimer::DayTimerEntryIdentity::parse(&mode_uuid, &from, &to)?;
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let (output, change) =
+                ConfigEditor::move_daytimer_entry(&data, &selector, identity, shift_minutes)?;
+            if let Some(destination) = &save_as
+                && let (Ok(input), Ok(destination)) = (
+                    std::path::Path::new(&file).canonicalize(),
+                    std::path::Path::new(destination).canonicalize(),
+                )
+                && input == destination
+            {
+                bail!(
+                    "The save-as destination aliases the input; choose a different output path. Nothing was changed."
+                );
+            }
+            let saved_to = if change.changed || save_as.is_some() {
+                write_edited_bytes(
+                    &output,
+                    &file,
+                    save_as.as_deref(),
+                    ctx.quiet || ctx.json || ctx.csv,
+                )?;
+                Some(save_as.as_deref().unwrap_or(&file))
+            } else {
+                None
+            };
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": saved_to,
+                        "move_change": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,MODE_UUID,STORED_MODE_UUID,PREVIOUS_FROM_MINUTES,PREVIOUS_TO_MINUTES,SHIFT_MINUTES,NEW_FROM_MINUTES,NEW_TO_MINUTES,CHANGED"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},{},{},{},{},{},{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry.mode_uuid,
+                    change.stored_mode_uuid,
+                    change.entry.from_minutes,
+                    change.entry.to_minutes,
+                    change.shift_minutes,
+                    change.new_from_minutes,
+                    change.new_to_minutes,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ DayTimer entry {from}-{to} for mode {mode_uuid}: {}-{} minutes ({})",
+                    change.new_from_minutes,
+                    change.new_to_minutes,
+                    if change.changed { "moved" } else { "unchanged" }
+                );
+            }
+        }
+        ConfigCmd::TimerEntrySetActivation {
+            file,
+            selector,
+            mode_uuid,
+            from,
+            to,
+            required,
+            no_required: _,
+            room,
+            save_as,
+        } => {
+            let identity =
+                crate::config_edit::daytimer::DayTimerEntryIdentity::parse(&mode_uuid, &from, &to)?;
+            let selector = match room {
+                Some(_) if selector.ends_with(']') && selector.contains('[') => {
+                    bail!("Use either a bracket room qualifier or --room, not both.")
+                }
+                Some(room) => format!("{selector} [{room}]"),
+                None => selector,
+            };
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let mut editor = ConfigEditor::load(&data)?;
+            let change = editor.set_daytimer_entry_activation(&selector, identity, required)?;
+            let quiet = ctx.quiet || ctx.json || ctx.csv;
+            if change.changed {
+                save_edited_with_quiet(&mut editor, &file, save_as.as_deref(), quiet)?;
+            } else if save_as.is_some() {
+                write_edited_bytes(&data, &file, save_as.as_deref(), quiet)?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "activation": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,MODE_UUID,STORED_MODE_UUID,FROM_MINUTES,TO_MINUTES,PREVIOUS_REQUIRED,ACTIVATION_REQUIRED,CHANGED"
+                    );
+                }
+                println!(
+                    "\"{}\",{},{},{},{},{},{},{}",
+                    change.block_uuid.replace('"', "\"\""),
+                    change.entry.mode_uuid,
+                    change.stored_mode_uuid,
+                    change.entry.from_minutes,
+                    change.entry.to_minutes,
+                    change.previous_required,
+                    change.activation_required,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ DayTimer entry {from}-{to} for mode {mode_uuid}: Activation required = {required} ({})",
+                    if change.changed {
+                        "changed"
+                    } else {
+                        "unchanged"
+                    }
+                );
+            }
+        }
         ConfigCmd::ModeList { file } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let controls = loxone_xml::parse_controls(&data, Some("Mode"), None)?;
@@ -2319,6 +3297,7 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
                 None => None,
             };
             save_edited_with_quiet(&mut editor, &file, save_as.as_deref(), ctx.quiet)?;
+            ctx.track_telemetry(|telemetry| telemetry.track_block_created("VirtualIn"));
             if ctx.json {
                 let mut obj = serde_json::json!({
                     "uuid": aq_uuid,
@@ -2414,6 +3393,17 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let mut editor = ConfigEditor::load(&data)?;
             let value = crate::commands::color_cmd::parse_color_to_mood(&color)?;
+            if ctx.dry_run {
+                let preview = editor.preview_mood_color(&selector, &mood, output_index, value)?;
+                if ctx.json {
+                    let mut result = serde_json::to_value(&preview)?;
+                    result["dry_run"] = true.into();
+                    emit_json(ctx, result);
+                } else {
+                    lighting::print_color_preview(ctx, &preview);
+                }
+                return Ok(());
+            }
             let msg = editor.set_mood_color(&selector, &mood, output_index, value)?;
             if ctx.json {
                 emit_json(
@@ -2442,6 +3432,17 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let mut editor = ConfigEditor::load(&data)?;
             let value = crate::commands::color_cmd::parse_color_to_mood(&color)?;
+            if ctx.dry_run {
+                let preview = editor.preview_mood_creation(&selector, &name, value, sid, cid)?;
+                if ctx.json {
+                    let mut result = serde_json::to_value(&preview)?;
+                    result["dry_run"] = true.into();
+                    emit_json(ctx, result);
+                } else {
+                    lighting::print_creation_preview(ctx, &preview);
+                }
+                return Ok(());
+            }
             let (mood_name, uuid, new_sid, new_cid) =
                 editor.add_mood(&selector, &name, value, sid, cid)?;
             if ctx.json {
@@ -2471,6 +3472,17 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
         } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let mut editor = ConfigEditor::load(&data)?;
+            if ctx.dry_run {
+                let preview = editor.preview_splice_actor(&selector, &source)?;
+                if ctx.json {
+                    let mut value = serde_json::to_value(&preview)?;
+                    value["dry_run"] = true.into();
+                    emit_json(ctx, value);
+                } else {
+                    print_splice_preview(ctx, &preview)?;
+                }
+                return Ok(());
+            }
             let outputref = editor.splice_actor(&selector, &source)?;
             if ctx.json {
                 emit_json(
@@ -2490,6 +3502,112 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             }
             save_edited(&mut editor, &file, save_as.as_deref())?;
         }
+        ConfigCmd::SetInputInversion {
+            file,
+            selector,
+            connector,
+            inverted,
+            no_inverted: _,
+            save_as,
+        } => {
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let (output, change) =
+                ConfigEditor::edit_input_inversion(&data, &selector, &connector, inverted)?;
+            let writes_output = change.changed || save_as.is_some();
+            if writes_output {
+                write_edited_bytes(
+                    &output,
+                    &file,
+                    save_as.as_deref(),
+                    ctx.quiet || ctx.json || ctx.csv,
+                )?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": writes_output.then(|| save_as.as_deref().unwrap_or(&file)),
+                        "input_inversion": change,
+                    }),
+                );
+            } else if ctx.csv {
+                if !ctx.no_header {
+                    println!(
+                        "BLOCK_UUID,CONNECTOR_UUID,CONNECTOR,PREVIOUS_INVERTED,INVERTED,CHANGED"
+                    );
+                }
+                println!(
+                    "{},{},{},{},{},{}",
+                    change.block_uuid,
+                    change.connector_uuid,
+                    change.connector,
+                    change.previous_inverted,
+                    change.inverted,
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ {}.{} inversion: {}{}",
+                    change.block_uuid,
+                    change.connector,
+                    change.inverted,
+                    if change.changed { "" } else { " (unchanged)" },
+                );
+            }
+        }
+        ConfigCmd::SetVirtualInputFormat {
+            file,
+            selector,
+            format,
+            clear,
+            save_as,
+        } => {
+            let data = fs::read(&file).with_context(|| format!("Cannot read {file}"))?;
+            let (output, change) = ConfigEditor::edit_virtual_input_format(
+                &data,
+                &selector,
+                format.as_deref().unwrap_or(""),
+                clear,
+            )?;
+            if change.changed || save_as.is_some() {
+                write_edited_bytes(
+                    &output,
+                    &file,
+                    save_as.as_deref(),
+                    ctx.quiet || ctx.json || ctx.csv,
+                )?;
+            }
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "saved_to": save_as.as_deref().unwrap_or(&file),
+                        "virtual_input_format": change,
+                    }),
+                );
+            } else if ctx.csv {
+                let field = |value: &str| format!("\"{}\"", value.replace('"', "\"\""));
+                if !ctx.no_header {
+                    println!("BLOCK_UUID,PREVIOUS_FORMAT,FORMAT,CHANGED");
+                }
+                println!(
+                    "{},{},{},{}",
+                    change.block_uuid,
+                    field(&change.previous_format),
+                    field(&change.format),
+                    change.changed,
+                );
+            } else if !ctx.quiet {
+                println!(
+                    "✓ {} display format: {}{}",
+                    change.block_uuid,
+                    if clear { "(empty)" } else { &change.format },
+                    if change.changed { "" } else { " (unchanged)" },
+                );
+            }
+        }
         ConfigCmd::SetParam {
             file,
             selector,
@@ -2498,69 +3616,47 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             save_as,
         } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
-            let mut editor = ConfigEditor::load(&data)?;
-
-            let path = editor.require_one(&selector)?;
-            let elem = editor.get_element_mut(&path);
-            let title = elem.attributes.get("Title").cloned().unwrap_or_default();
-            let block_type = elem.attributes.get("Type").cloned().unwrap_or_default();
-
-            // Find the connector with matching K value
-            let mut found = false;
-            for child in &mut elem.children {
-                if let Some(co) = child.as_mut_element()
-                    && co.name == "Co"
-                    && co.attributes.get("K").map(|k| k == &param).unwrap_or(false)
-                {
-                    let old = co
-                        .attributes
-                        .get("Def")
-                        .cloned()
-                        .unwrap_or_else(|| "(none)".to_string());
-                    co.attributes.insert("Def".to_string(), value.clone());
-                    // Validate it's a Parameter connector
-                    if let Some(io) = ConfigEditor::connector_io_type(&block_type, &param)
-                        && io != "P"
-                    {
-                        eprintln!(
-                            "⚠ {}.{} is an {} connector, not a Parameter",
-                            title,
-                            param,
-                            match io.as_str() {
-                                "I" => "Input",
-                                "O" => "Output",
-                                _ => &io,
-                            }
-                        );
-                    }
-                    if ctx.json {
-                        emit_json(
-                            ctx,
-                            serde_json::json!({
-                                "ok": true,
-                                "block": title,
-                                "type": block_type,
-                                "param": param,
-                                "old": old,
-                                "new": value,
-                            }),
-                        );
-                    } else {
-                        println!("✓ Set {}.{}: {} → {}", title, param, old, value);
-                    }
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                bail!(
-                    "Parameter '{}' not found on '{}' ({})",
-                    param,
+            let outcome = lox_core::configuration::editor::set_param(
+                &data,
+                &selector,
+                &param,
+                &value,
+                &chrono::Local::now().fixed_offset(),
+            )
+            .map_err(crate::config_edit::editor_error)?;
+            let title = &outcome.change.element.title;
+            let block_type = &outcome.change.element.block_type;
+            let old = outcome.change.old_value.as_deref().unwrap_or("(none)");
+            if let Some(io) = ConfigEditor::connector_io_type(block_type, &param)
+                && io != "P"
+            {
+                eprintln!(
+                    "⚠ {}.{} is an {} connector, not a Parameter",
                     title,
-                    block_type
+                    param,
+                    match io.as_str() {
+                        "I" => "Input",
+                        "O" => "Output",
+                        _ => &io,
+                    }
                 );
             }
-            save_edited(&mut editor, &file, save_as.as_deref())?;
+            if ctx.json {
+                emit_json(
+                    ctx,
+                    serde_json::json!({
+                        "ok": true,
+                        "block": title,
+                        "type": block_type,
+                        "param": param,
+                        "old": old,
+                        "new": value,
+                    }),
+                );
+            } else {
+                println!("✓ Set {}.{}: {} → {}", title, param, old, value);
+            }
+            write_edited_bytes(&outcome.bytes, &file, save_as.as_deref(), false)?;
         }
         ConfigCmd::Connectors { file, selector } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
@@ -2929,6 +4025,13 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let editor = ConfigEditor::load(&data)?;
             let stats = editor.config_stats();
+            ctx.track_telemetry(|telemetry| {
+                telemetry.track_config_stats(
+                    stats.room_count,
+                    stats.block_types.iter().map(|(_, count)| count).sum(),
+                    stats.wiring_total,
+                );
+            });
             if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             } else {
@@ -2945,6 +4048,11 @@ pub fn cmd_config(ctx: &RunContext, action: ConfigCmd) -> Result<()> {
             let mut editor = ConfigEditor::load(&data)?;
             let plan = editor.apply_template(&template, &room)?;
             save_edited(&mut editor, &file, save_as.as_deref())?;
+            ctx.track_telemetry(|telemetry| {
+                for (block_type, _, _) in &plan {
+                    telemetry.track_block_created(block_type);
+                }
+            });
 
             if ctx.json {
                 let blocks: Vec<_> = plan
@@ -3132,29 +4240,12 @@ fn cmd_config_report(
             serde_json::to_string_pretty(&report)?
         );
 
-        // Try gh CLI first
-        let gh_result = std::process::Command::new("gh")
-            .args([
-                "issue",
-                "create",
-                "--repo",
-                "eisber/lox-cli",
-                "--title",
-                title,
-                "--body",
-                &body,
-            ])
-            .output();
-
-        match gh_result {
-            Ok(output) if output.status.success() => {
-                let url = String::from_utf8_lossy(&output.stdout);
-                println!("✓ GitHub issue created: {}", url.trim());
+        match super::report_cmd::create_github_issue(title, &body) {
+            Ok(url) => {
+                println!("✓ GitHub issue created: {}", url);
             }
-            _ => {
-                eprintln!(
-                    "⚠ Could not create GitHub issue (install `gh` CLI and run `gh auth login`)."
-                );
+            Err(error) => {
+                eprintln!("⚠ Could not create GitHub issue: {error:#}");
                 eprintln!("  Copy the JSON report above and file manually at:");
                 eprintln!("  https://github.com/eisber/lox-cli/issues/new");
             }
@@ -3616,6 +4707,15 @@ fn save_edited_with_quiet(
     {
         output = editor.to_bytes()?;
     }
+    write_edited_bytes(&output, original_path, save_as, quiet)
+}
+
+fn write_edited_bytes(
+    output: &[u8],
+    original_path: &str,
+    save_as: Option<&str>,
+    quiet: bool,
+) -> Result<()> {
     let out_path = save_as.unwrap_or(original_path);
 
     // Resolve to canonical parent dir to prevent path traversal via ".." in out_path
@@ -3637,21 +4737,137 @@ fn save_edited_with_quiet(
     let tmp_path = canon_parent.join(&tmp_name);
     let final_path = canon_parent.join(file_name);
 
-    fs::write(&tmp_path, &output)?;
-    fs::rename(&tmp_path, &final_path).or_else(|_| {
-        // rename can fail across filesystems — fall back to copy+delete
-        fs::copy(&tmp_path, &final_path)?;
-        fs::remove_file(&tmp_path)
-            .with_context(|| format!("Failed to clean up temp file: {}", tmp_path.display()))?;
-        Ok::<(), anyhow::Error>(())
-    })?;
+    let mut staging = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .with_context(|| {
+            format!(
+                "Cannot exclusively create staging file {}; existing staging storage is never overwritten",
+                tmp_path.display()
+            )
+        })?;
+    let result = (|| {
+        staging
+            .write_all(output)
+            .with_context(|| format!("Cannot write staging file {}", tmp_path.display()))?;
+        staging
+            .sync_all()
+            .with_context(|| format!("Cannot sync staging file {}", tmp_path.display()))?;
+        drop(staging);
+        fs::rename(&tmp_path, &final_path)
+            .with_context(|| format!("Cannot atomically rename staging file to {}", out_path))
+    })();
+    if let Err(error) = result {
+        fs::remove_file(&tmp_path).with_context(|| {
+            format!(
+                "Cannot clean up owned staging file {} after save failed: {error:#}",
+                tmp_path.display()
+            )
+        })?;
+        return Err(error);
+    }
     if !quiet {
         eprintln!("✓ Saved to {}", out_path);
     }
     Ok(())
 }
 
-fn cmd_room(_ctx: &RunContext, action: RoomCmd) -> Result<()> {
+fn print_room_rename_preview(ctx: &RunContext, preview: &RoomRenamePreview) -> Result<()> {
+    let fields = [
+        ("SELECTOR", serde_json::to_string(&preview.selector)?),
+        ("SELECTED", serde_json::to_string(&preview.selected)?),
+        ("UUID_SOURCE", serde_json::to_string(&preview.uuid_source)?),
+        ("TARGET", serde_json::to_string(&preview.target)?),
+        (
+            "BEFORE_TITLE",
+            serde_json::to_string(&preview.before_title)?,
+        ),
+        ("AFTER_TITLE", serde_json::to_string(&preview.after_title)?),
+        ("CHANGED", preview.changed.to_string()),
+        ("REPORT", serde_json::to_string(&preview.report)?),
+        ("SCOPE", preview.scope.to_owned()),
+    ];
+    if ctx.csv {
+        if !ctx.no_header {
+            println!(
+                "{}",
+                fields
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
+        println!(
+            "{}",
+            fields
+                .iter()
+                .map(|(_, value)| format!("\"{}\"", value.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    } else {
+        if !ctx.no_header {
+            println!("ROOM RENAME PREVIEW  FIELD  STORED/PLANNED VALUE");
+        }
+        for (key, value) in fields {
+            println!("{key}  {value}");
+        }
+        if !ctx.quiet {
+            println!("\nTitle attribute only; dry-run wrote no files");
+        }
+    }
+    Ok(())
+}
+
+fn print_room_add_preview(ctx: &RunContext, preview: &RoomAddPreview) -> Result<()> {
+    let fields = [
+        ("NAME", serde_json::to_string(&preview.name)?),
+        ("PARENT", serde_json::to_string(&preview.parent)?),
+        (
+            "INSERT_AFTER",
+            serde_json::to_string(&preview.insert_after)?,
+        ),
+        ("ROOM", serde_json::to_string(&preview.room)?),
+        ("UUID_EPHEMERAL", preview.uuid_ephemeral.to_string()),
+        ("REPORT", serde_json::to_string(&preview.report)?),
+        ("SCOPE", preview.scope.to_owned()),
+    ];
+    if ctx.csv {
+        if !ctx.no_header {
+            println!(
+                "{}",
+                fields
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
+        println!(
+            "{}",
+            fields
+                .iter()
+                .map(|(_, value)| format!("\"{}\"", value.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    } else {
+        if !ctx.no_header {
+            println!("ROOM ADD PREVIEW  FIELD  STORED/PLANNED VALUE");
+        }
+        for (key, value) in fields {
+            println!("{key}  {value}");
+        }
+        if !ctx.quiet {
+            println!("\nPlace insertion only; dry-run wrote no files");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_room(ctx: &RunContext, action: RoomCmd) -> Result<()> {
     match action {
         RoomCmd::Add {
             file,
@@ -3660,6 +4876,17 @@ fn cmd_room(_ctx: &RunContext, action: RoomCmd) -> Result<()> {
         } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let mut editor = ConfigEditor::load(&data)?;
+            if ctx.dry_run {
+                let preview = editor.preview_room_add(&name)?;
+                if ctx.json {
+                    let mut value = serde_json::to_value(&preview)?;
+                    value["dry_run"] = true.into();
+                    emit_json(ctx, value);
+                } else {
+                    print_room_add_preview(ctx, &preview)?;
+                }
+                return Ok(());
+            }
             let uuid = editor.add_room(&name)?;
             println!("✓ Added room '{}' (UUID: {})", name, uuid);
             save_edited(&mut editor, &file, save_as.as_deref())?;
@@ -3672,27 +4899,65 @@ fn cmd_room(_ctx: &RunContext, action: RoomCmd) -> Result<()> {
         } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
             let mut editor = ConfigEditor::load(&data)?;
-            // Find the room by title and rename
-            let _path = editor.require_one(&old_name)?;
-            let msg = editor.set_attribute(
-                &format!("uuid:{}", {
-                    let elem = editor.find_elements(&old_name);
-                    if elem.is_empty() {
-                        bail!("Room '{}' not found", old_name);
-                    }
-                    // Get UUID from the element
-                    let p = &elem[0];
-                    let mut current = &editor.root;
-                    for &idx in p {
-                        current = current.children[idx].as_element().unwrap();
-                    }
-                    current.attributes.get("U").cloned().unwrap_or_default()
-                }),
-                "Title",
-                &new_name,
-            )?;
+            if ctx.dry_run {
+                let preview = editor.preview_room_rename(&old_name, &new_name)?;
+                if ctx.json {
+                    let mut value = serde_json::to_value(&preview)?;
+                    value["dry_run"] = true.into();
+                    emit_json(ctx, value);
+                } else {
+                    print_room_rename_preview(ctx, &preview)?;
+                }
+                return Ok(());
+            }
+            let msg = editor.rename_room(&old_name, &new_name)?;
             println!("✓ {}", msg);
             save_edited(&mut editor, &file, save_as.as_deref())?;
+        }
+    }
+    Ok(())
+}
+
+fn print_control_move_preview(ctx: &RunContext, preview: &ControlMovePreview) -> Result<()> {
+    let fields = [
+        ("SELECTOR", serde_json::to_string(&preview.selector)?),
+        ("EXCLUDE", serde_json::to_string(&preview.exclude)?),
+        ("TARGET_ROOM", serde_json::to_string(&preview.target_room)?),
+        ("ROOM_UUID", serde_json::to_string(&preview.room_uuid)?),
+        ("SELECTED", serde_json::to_string(&preview.selected)?),
+        ("COUNT", preview.count.to_string()),
+        ("CHANGED", preview.changed.to_string()),
+        ("REPORT", serde_json::to_string(&preview.report)?),
+        ("SCOPE", preview.scope.to_owned()),
+    ];
+    if ctx.csv {
+        if !ctx.no_header {
+            println!(
+                "{}",
+                fields
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
+        println!(
+            "{}",
+            fields
+                .iter()
+                .map(|(_, value)| format!("\"{}\"", value.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    } else {
+        if !ctx.no_header {
+            println!("CONTROL MOVE PREVIEW  FIELD  STORED/PLANNED VALUE");
+        }
+        for (key, value) in fields {
+            println!("{key}  {value}");
+        }
+        if !ctx.quiet {
+            println!("\nIoData.Pr attributes only; dry-run wrote no files");
         }
     }
     Ok(())
@@ -3713,30 +4978,29 @@ fn cmd_control(ctx: &RunContext, action: ControlCmd) -> Result<()> {
 
             let exclude_refs: Vec<&str> = exclude.iter().map(|s| s.as_str()).collect();
 
-            if let Some(ref tf) = type_filter {
-                let (count, room_uuid) = editor.move_to_room(tf, &to_room, &exclude_refs)?;
-                println!(
-                    "✓ Moved {} {} items to '{}' ({})",
-                    count, tf, to_room, room_uuid
-                );
-            } else if let Some(ref t) = title {
-                // Move single element by title
-                let path = editor.require_one(t)?;
-                let room_uuid = editor.find_room_uuid(&to_room)?;
-                let elem = editor.get_element_mut(&path);
-                for child in &mut elem.children {
-                    if let Some(iodata) = child.as_mut_element()
-                        && iodata.name == "IoData"
-                    {
-                        iodata
-                            .attributes
-                            .insert("Pr".to_string(), room_uuid.clone());
-                    }
+            if ctx.dry_run {
+                let preview = editor.preview_control_move(
+                    type_filter.as_deref(),
+                    title.as_deref(),
+                    &to_room,
+                    &exclude_refs,
+                )?;
+                if ctx.json {
+                    let mut value = serde_json::to_value(&preview)?;
+                    value["dry_run"] = true.into();
+                    emit_json(ctx, value);
+                } else {
+                    print_control_move_preview(ctx, &preview)?;
                 }
-                println!("✓ Moved '{}' to '{}' ({})", t, to_room, room_uuid);
-            } else {
-                bail!("Specify --type or --title to select controls to move");
+                return Ok(());
             }
+            let report = editor.move_control(
+                type_filter.as_deref(),
+                title.as_deref(),
+                &to_room,
+                &exclude_refs,
+            )?;
+            println!("✓ {}", report);
 
             save_edited(&mut editor, &file, save_as.as_deref())?;
         }
@@ -3840,8 +5104,12 @@ fn cmd_control(ctx: &RunContext, action: ControlCmd) -> Result<()> {
         }
         ControlCmd::Wires { file, selector } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
-            let editor = ConfigEditor::load(&data)?;
-            let wires = editor.list_wires(&selector)?;
+            let wires: Vec<crate::config_edit::WireInfo> =
+                lox_core::configuration::wiring::connector_wiring(&data, &selector)
+                    .map_err(crate::config_edit::editor_error)?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
 
             if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&wires)?);
@@ -3961,8 +5229,12 @@ fn cmd_mqtt_config(ctx: &RunContext, action: MqttConfigCmd) -> Result<()> {
         }
         MqttConfigCmd::Topics { file } => {
             let data = fs::read(&file).with_context(|| format!("Cannot read {}", file))?;
-            let editor = ConfigEditor::load(&data)?;
-            let topics = editor.list_mqtt_topics();
+            let topics: Vec<crate::config_edit::MqttTopic> =
+                lox_core::configuration::mqtt::list_topics(&data)
+                    .map_err(crate::config_edit::editor_error)?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
 
             if ctx.json {
                 println!("{}", serde_json::to_string_pretty(&topics)?);
@@ -4113,7 +5385,17 @@ pub fn cmd_completions(
     let Some(sh) = detected else {
         bail!("Could not detect shell. Specify one: lox completions bash|zsh|fish");
     };
-    let mut cmd = Cli::command();
+    // clap_complete includes hidden commands, so omit compatibility routes.
+    let cli = Cli::command();
+    let mut cmd = clap::Command::new("lox")
+        .version(env!("CARGO_PKG_VERSION"))
+        .disable_help_subcommand(true)
+        .args(cli.get_arguments().cloned())
+        .subcommands(
+            cli.get_subcommands()
+                .filter(|cmd| !cmd.is_hide_set())
+                .cloned(),
+        );
     if install {
         install_completions(sh, &mut cmd)?;
     } else {
@@ -4651,6 +5933,139 @@ mod tests {
             no_header: false,
             non_interactive: false,
             trace_id: None,
+            telemetry: None,
+        }
+    }
+
+    fn autopilot_action_fixture() -> String {
+        let value = serde_json::json!({
+            "type": 1, "id": "11111111-2222-3333-4444555566667777",
+            "active": true, "activeIfValid": true,
+            "eventGroups": [{"events": [{"type": 5, "descID": 88, "id": 0, "value": 700}]}],
+            "actions": [
+                {"type": 5, "descID": 337705, "id": 0, "command": "400", "arrValues": ["400"]},
+                {"type": 5, "descID": 337705, "id": 0, "command": "900", "arrValues": ["900"]}
+            ]
+        })
+        .to_string();
+        format!(
+            "<ControlList><C Type=\"Document\"><C Type=\"AutopilotRule\" V=\"175\" U=\"11111111-2222-3333-4444555566667777\" STA=\"1\" APC=\"{}\"/></C></ControlList>",
+            quick_xml::escape::escape(&value),
+        )
+    }
+
+    #[test]
+    fn test_cmd_autopilot_actions_save_and_refuse_before_save_as() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("input.Loxone");
+        let destination = directory.path().join("edited.Loxone");
+        let selector = "uuid:11111111-2222-3333-4444555566667777";
+        let mut context = ctx();
+        context.quiet = true;
+        let input = autopilot_action_fixture();
+        fs::write(&file, &input).unwrap();
+        edit_autopilot_action(
+            &context,
+            file.to_str().unwrap(),
+            selector,
+            0,
+            Some(1),
+            Some(destination.to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), input);
+        let editor = ConfigEditor::load(&fs::read(&destination).unwrap()).unwrap();
+        let owner = editor.find_elements(selector).remove(0);
+        let apc: serde_json::Value =
+            serde_json::from_str(&editor.get_element(&owner).attributes["APC"]).unwrap();
+        assert_eq!(apc["actions"][0]["command"], "900");
+        assert_eq!(apc["actions"][1]["command"], "400");
+
+        let invalid = input.replace(
+            "<C Type=\"Document\">",
+            "<C Type=\"Document\"><Template IfT=\"false\"/>",
+        );
+        fs::write(&file, &invalid).unwrap();
+        for existing in [false, true] {
+            if existing {
+                fs::write(&destination, b"keep existing").unwrap();
+            } else {
+                fs::remove_file(&destination).unwrap();
+            }
+            for target in [None, Some(0)] {
+                assert!(
+                    edit_autopilot_action(
+                        &context,
+                        file.to_str().unwrap(),
+                        selector,
+                        0,
+                        target,
+                        Some(destination.to_str().unwrap()),
+                    )
+                    .is_err()
+                );
+                assert_eq!(fs::read_to_string(&file).unwrap(), invalid);
+                if existing {
+                    assert_eq!(fs::read(&destination).unwrap(), b"keep existing");
+                } else {
+                    assert!(!destination.exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cmd_autopilot_actions_review_refusals_are_atomic() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("input.Loxone");
+        let destination = directory.path().join("edited.Loxone");
+        let original = autopilot_action_fixture();
+        let selector = "uuid:11111111-2222-3333-4444555566667777";
+        let mut context = ctx();
+        context.quiet = true;
+        for invalid in [
+            original.replace("Type=\"Document\"", "Type=\"document\""),
+            original.replace("APC=\"{", "APC=\"{&quot;visu&quot;:{},"),
+            original.replace("APC=\"{", "APC=\"{&quot;future&quot;:true,"),
+            original.replace("&quot;value&quot;:700", "&quot;value&quot;:7e2"),
+            original.replace(
+                "&quot;type&quot;:5,&quot;value&quot;:700",
+                "&quot;type&quot;:4,&quot;value&quot;:123456789012345678901234567890",
+            ),
+        ] {
+            assert_ne!(
+                invalid, original,
+                "review fixture replacement did not match"
+            );
+            for destination_kind in ["source", "new", "existing"] {
+                fs::write(&file, &invalid).unwrap();
+                if destination.exists() {
+                    fs::remove_file(&destination).unwrap();
+                }
+                if destination_kind == "existing" {
+                    fs::write(&destination, b"preserve destination").unwrap();
+                }
+                for target in [None, Some(0), Some(1)] {
+                    assert!(
+                        edit_autopilot_action(
+                            &context,
+                            file.to_str().unwrap(),
+                            selector,
+                            0,
+                            target,
+                            (destination_kind != "source").then(|| destination.to_str().unwrap()),
+                        )
+                        .is_err(),
+                        "{destination_kind}/{target:?}: {invalid}"
+                    );
+                    assert_eq!(fs::read_to_string(&file).unwrap(), invalid);
+                    if destination_kind == "existing" {
+                        assert_eq!(fs::read(&destination).unwrap(), b"preserve destination");
+                    } else {
+                        assert!(!destination.exists());
+                    }
+                }
+            }
         }
     }
 
@@ -4770,9 +6185,46 @@ mod tests {
             no_header: false,
             non_interactive: false,
             trace_id: None,
+            telemetry: None,
         };
         let result = cmd_config(&json_ctx, ConfigCmd::Stats { file });
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn config_feature_telemetry_delivers_only_aggregate_results() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start();
+        let stats = server.mock(|when, then| {
+            when.method(POST).json_body_partial(
+                r#"{"event":"config_stats","properties":{"rooms":2,"source":"test"}}"#,
+            );
+            then.status(200);
+        });
+        let scan = server.mock(|when, then| {
+            when.method(POST)
+                .json_body_partial(r#"{"event":"config_scan","properties":{"source":"test"}}"#);
+            then.status(200);
+        });
+        let (_dir, file) = fixture_file();
+        {
+            let mut context = ctx();
+            context.telemetry = Some(std::cell::RefCell::new(
+                crate::telemetry::Telemetry::for_test(server.url("/capture/")),
+            ));
+            cmd_config(&context, ConfigCmd::Stats { file: file.clone() }).unwrap();
+            cmd_config(
+                &context,
+                ConfigCmd::Scan {
+                    file,
+                    strict: false,
+                },
+            )
+            .unwrap();
+        }
+        stats.assert_hits(1);
+        scan.assert_hits(1);
     }
 
     #[test]
@@ -4813,6 +6265,7 @@ mod tests {
             no_header: false,
             non_interactive: false,
             trace_id: None,
+            telemetry: None,
         };
         let result = cmd_config(
             &json_ctx,
@@ -5730,6 +7183,55 @@ sleep</Field>
     }
 
     #[test]
+    fn test_cmd_add_operating_mode_save_as_and_atomic_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("modes.Loxone");
+        let destination = dir.path().join("new.Loxone");
+        let mut modes: String = (1..=6).map(|id| format!("<C Type=\"Mode\" U=\"00000000-0000-{id:04x}-ffff112233445566\" Title=\"Builtin{id}\" Mode=\"-{id}\"/>")).collect();
+        for id in 0..=9 {
+            let identity = id + 1;
+            modes.push_str(&format!("<C Type=\"Mode\" U=\"00000000-0000-{identity:04x}-1500000000000000\" Title=\"Day{id}\" Mode=\"{id}\"/>"));
+        }
+        let input = format!(
+            "<ControlList><C Type=\"Document\" U=\"11111111-2222-3333-ffff112233445566\" NumO=\"18\"><C Type=\"ModeCaption\" U=\"22222222-2222-3333-ffff112233445566\">{modes}</C></C></ControlList>"
+        );
+        fs::write(&file, &input).unwrap();
+        let command = |source: &std::path::Path, output: &std::path::Path| ConfigCmd::Add {
+            file: source.to_string_lossy().into_owned(),
+            control_type: "operating-mode".into(),
+            title: "Evening".into(),
+            room: None,
+            category: None,
+            parent: None,
+            page: None,
+            device: None,
+            topic: None,
+            analog: false,
+            min: None,
+            max: None,
+            unit: None,
+            grant: None,
+            save_as: Some(output.to_string_lossy().into_owned()),
+        };
+        cmd_config(&ctx(), command(&file, &destination)).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), input);
+        let saved = fs::read(&destination).unwrap();
+        let editor = ConfigEditor::load(&saved).unwrap();
+        let modes = editor.find_elements("Type:Mode");
+        assert_eq!(modes.len(), 17);
+        assert_eq!(
+            editor.get_element(modes.last().unwrap()).attributes["Mode"],
+            "-7"
+        );
+        let absent = dir.path().join("absent.Loxone");
+        assert!(cmd_config(&ctx(), command(&destination, &absent)).is_err());
+        assert!(!absent.exists());
+        assert!(cmd_config(&ctx(), command(&destination, &file)).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), input);
+        assert_eq!(fs::read(&destination).unwrap(), saved);
+    }
+
+    #[test]
     fn test_resolve_block_type_valid() {
         let (name, _parent) = resolve_block_type("And").unwrap();
         assert_eq!(name, "And");
@@ -5768,6 +7270,30 @@ sleep</Field>
         assert!(String::from_utf8_lossy(&data).contains("ControlList"));
     }
 
+    #[test]
+    fn test_save_edited_atomic_cleans_owned_stage_after_failed_rename() {
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let input = dir.path().join("input.Loxone");
+        let destination = dir.path().join("destination.Loxone");
+        let staging = dir.path().join("destination.Loxone.tmp");
+        fs::write(&input, FIXTURE_XML).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let sentinel = destination.join("foreign");
+        fs::write(&sentinel, b"preserve directory contents").unwrap();
+        assert!(
+            write_edited_bytes(
+                b"edited bytes",
+                input.to_str().unwrap(),
+                Some(destination.to_str().unwrap()),
+                true,
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&input).unwrap(), FIXTURE_XML.as_bytes());
+        assert_eq!(fs::read(&sentinel).unwrap(), b"preserve directory contents");
+        assert!(!staging.exists());
+    }
+
     const STAMPED_XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <ControlList Version="254">
 	<C Type="Document" U="doc-1" Title="Home" Date="2025-06-10 09:02:40" CDate="" DateS="518770960">
@@ -5804,6 +7330,43 @@ sleep</Field>
         let mut editor = ConfigEditor::load(STAMPED_XML.as_bytes()).unwrap();
         save_edited(&mut editor, path.to_str().unwrap(), None).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), STAMPED_XML);
+    }
+
+    #[test]
+    fn test_save_edited_load_manager_compares_canonical_reread_not_initial_source() {
+        use crate::config_edit::load_manager::LoadMoveDirection;
+
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let input = dir.path().join("input.Loxone");
+        let output = dir.path().join("output.Loxone");
+        let rows: String = (0..12).map(|i| format!(r#"<Load ioIdx="{i}"/>"#)).collect();
+        let xml = format!(
+            r#"<C Type="Document" Date="original" DateS="2147483647"><C Type="LoadShed" U="manager">{rows}</C></C>"#
+        );
+        let equivalent = xml.replace(
+            r#"<Load ioIdx="0"/><Load ioIdx="1"/>"#,
+            r#"<Load ioIdx="1"></Load><Load ioIdx="0"/>"#,
+        );
+        for (reread, expected_stamp) in [(&equivalent, "2147483647"), (&xml, "2147483648")] {
+            fs::write(&input, &xml).unwrap();
+            let mut editor = ConfigEditor::load(&fs::read(&input).unwrap()).unwrap();
+            editor
+                .move_load_manager_load("uuid:manager", 0, LoadMoveDirection::Down)
+                .unwrap();
+            editor.inspect_load_manager("uuid:manager").unwrap();
+            fs::write(&input, reread).unwrap();
+            save_edited_with_quiet(
+                &mut editor,
+                input.to_str().unwrap(),
+                Some(output.to_str().unwrap()),
+                true,
+            )
+            .unwrap();
+            let saved = fs::read_to_string(&output).unwrap();
+            assert!(saved.contains(&format!(r#"DateS="{expected_stamp}""#)));
+            assert_eq!(fs::read_to_string(&input).unwrap(), *reread);
+            fs::remove_file(&output).unwrap();
+        }
     }
 
     #[test]

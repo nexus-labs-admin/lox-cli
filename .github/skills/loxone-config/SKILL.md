@@ -12,9 +12,30 @@ allowed-tools: Bash
 # Loxone Config-as-Code
 
 You are a Loxone home automation expert. You configure Miniservers using the `lox` CLI.
-Respond ONLY with `lox config` and `lox sim` commands, one per line. No explanations.
+Respond ONLY with `lox config`, `lox sim`, and issue-reporting `lox report`
+commands, one per line. No explanations.
 
 **Tip:** Use `--json` (shorthand for `--output json`) on any command for structured output.
+
+## Reporting CLI issues
+
+Correct parameter, input, authentication, and connection mistakes first. If
+documented or schema-generated usage still fails, or the CLI panics, report
+sanitized reproduction steps, expected behavior, and actual behavior:
+
+```bash
+lox report --title "Short bug summary" --body "Sanitized reproduction and expected/actual behavior" --json
+```
+
+This needs no Miniserver connection. It tries a public GitHub issue first via
+`gh`, then the existing PostHog setup if telemetry is enabled. The fallback
+includes the supplied title/body; never include secrets, private configuration,
+or personal data. Use `--body-file -` for stdin or `--dry-run` to preview.
+Check the receipt's `channel` and `report_id`; a nonzero exit means delivery
+was not confirmed. Do not repeatedly submit the same issue or recursively report
+a failed submission. JSON errors and command schemas include `report_hint`;
+human errors and Rust panics print the same guidance. Reports are never
+submitted automatically.
 
 ## Commands
 
@@ -101,7 +122,19 @@ lox config moods FILE "uuid:<lightcontroller>"
   moods in Loxone Config, or **detach the actor** (`config splice-actor`) and
   feed it a colour composite directly.
 
-### Change an existing mood's colour / brightness
+### Change an existing mood's packed colour
+
+```
+lox config lighting inspect FILE "uuid:<lightcontroller>" --output json
+```
+
+- Inspect `moods[].outputs[].editor.kind` first: `numeric` uses the guarded
+  `lighting set-mood-level` operation below; `color` identifies a native color
+  control branch, not a mode-aware CLI color operation. `other` is outside those
+  supported branches; `unresolved` includes an explicit issue and preserves raw data.
+- Needed capabilities distinguish raw omission from effective default 0 and
+  unsupported explicit values. Classification is stored per-mood editor state,
+  not hardware roles or a prediction of graph-dependent refresh.
 
 ```
 lox config set-mood-color FILE "uuid:<lightcontroller>" --mood <SID|Name> --color "hsv(120,100,10)"
@@ -114,7 +147,28 @@ lox config set-mood-color FILE "uuid:<lightcontroller>" --mood <SID|Name> --colo
   (0..100)**, not 0..255. Use `lox color encode --mood` to compute it
   (`lox color encode --hsv 120,100,10 --mood` → `1610622736`). Scaling all
   channels x2 doubles brightness while preserving hue/saturation.
-- Creating a brand-new mood is not yet supported — author it in Loxone Config.
+- Create a new mood with `config add-mood`; see below.
+- This is packed/raw storage, not channel-appropriate numeric dimming.
+
+### Change a numeric mood level
+
+```
+lox config lighting set-mood-level FILE "uuid:<lightcontroller>" --mood <SID|Name> --output-index 2 --level 37
+```
+
+- Validates the stored per-mood numeric editor kind, then writes
+  `(oldQ & 0xf0000000) | level`. Preserves the type tag; does not RGB-pack a level.
+- Requires one direct matching mood and an existing supported Q1..Q18 within
+  its stored reader width. Numeric tags 1/2/3/7 are supported; tag 6 additionally
+  requires `CapAI<n-1>` with bit 0x40 clear and low three bits not all set.
+  Missing capability uses recovered reader default 0; needed explicit values
+  must be supported nonnegative 16-bit decimals.
+- Rejects out-of-range levels, color/switch/unsupported kinds, missing/opaque
+  Qn and ambiguous targets before writing; never silently clamps or converts.
+  `--room` and `--save-as` are supported.
+- Native accepted numeric 37 saved and reopened with the same selected encoding.
+  Unlike that native dialog workflow, the CLI does not normalize other outputs
+  or HCL. No physical channel or runtime parity is implied.
 
 ### Create a brand-new mood
 
@@ -123,11 +177,119 @@ lox config add-mood FILE "uuid:<lightcontroller>" --name "Teams purple" --color 
 ```
 
 - Appends a fresh `<LightsceneC>` to the controller's `<LightscenesC>` container:
-  generated UUID, next free custom `SID` (base 2, skipping reserved 1/776/777/778)
-  and `CID` (base 9), `Outputs` mirrored from the container, `Q1` = packed mood
-  value, `Q2..Qn` = 0, and `Num` incremented.
-- `--sid N` / `--cid N` override the auto-assigned ids. Duplicate name or SID is rejected.
+  generated UUID, lowest unused `SID` in 1..99, `Outputs=18`, and
+  `Q1` = the explicit packed mood value. For SID 1..8, try only `CID=SID+11`;
+  use CID 0 if occupied or if SID is above 8. Exhaustion is an atomic error.
+  `Q2..Q18` preserve only the first direct mood's encoded type nibble
+  (`value & 0xf0000000`), with remaining value bits cleared. Missing values or
+  values outside that source mood's `Outputs` bound initialize to zero;
+  missing/zero source `Outputs` means 12. `Num` is recounted from direct records.
+- This intentionally replaces container-width/zero-fill defaults with the recovered
+  Config 17.2.10.21 append-path initialization; 18 is not a universal maximum.
+  Existing moods, collection `Outputs`, sparse values and unknown data stay intact.
+  Needed opaque/out-of-range source values or unsupported collection shapes fail
+  before writing, rather than being guessed. Full native dialog/load/save, GUI
+  roundtrip, sequence handling and runtime parity are not claimed.
+- Supplying either `--sid N` or `--cid N` retains the legacy override path:
+  the omitted partner uses max-custom-plus-one (base SID 2 / CID 9, with
+  SID 1/776/777/778 excluded from maxima). Duplicate name or SID is rejected;
+  duplicate explicit CID remains accepted. Existing scene IDs are untouched.
 - Recall live afterwards with `lox live set <controller> changeTo/<SID> --write`.
+
+### Change an existing mood CID binding
+
+```
+lox config lighting set-mood-cid FILE "uuid:<lightcontroller>" --mood <SID|Name> --cid 13 --save-as rebound.Loxone
+```
+
+- Performs the recovered existing-record CID transaction, not append override
+  allocation. Nonzero occupied CID swaps; CID0 does not swap. CID22/24 map
+  SID roles to777/776; other affected special SIDs may receive free1..99 IDs.
+- Reports every affected identity and ordered `LSConfig/ScMv` remap. Native
+  remaps can cascade; do not treat them as simultaneous UUID renames.
+- Requires matching `Num`, unambiguous positive SIDs/nonzero CIDs and supported
+  needed selection lists. Absent CID means effective0 and remains absent when
+  unchanged. Unsupported identities, role collisions and exhaustion fail before
+  writing; no automatic repair or zero-SID sentinel.
+- Preserves Qn/type flags, widths/counts, HCL, sequences and unknown data.
+  Existing `add-mood --sid/--cid` and raw packed-color operations are unchanged.
+  Native save/reopen validation remains a separately queued admission dependency.
+
+### Reassign an ordinary existing mood SID
+
+```
+lox config lighting set-mood-sid FILE "uuid:<lightcontroller>" --mood <SID|Name> --sid 2 --swap
+```
+
+- Selected/requested SIDs are1..90; occupied IDs require explicit `--swap`.
+  Require matching Num and unique positive signed32 direct SIDs. Reject a real
+  SID99 during exchange; it is the native temporary identity.
+- Ordered ScMv remaps use the existing CID planner, not simultaneous rename.
+  Existing visited ScMv99 participates in the final remap; unvisited tails stay.
+  Free requested SID32..90 with positive CID requires `--allow-cid-clear`.
+  This permits only native selected-CID0 clearing; zero/omitted, occupied,
+  lower-ID and no-op branches preserve CID. Needed malformed data fails.
+  Other CIDs and unrelated storage are unchanged. No special-ID, import,
+  full dialog or runtime parity is inferred.
+
+### Rename an existing mood or set mix/cycling options
+
+```
+lox config lighting rename-mood FILE "uuid:<lightcontroller>" --mood <SID|Name> --name "Late Evening"
+lox config lighting inspect-mood-options FILE "uuid:<lightcontroller>" --mood <SID|Name> --output json
+lox config lighting inspect-mood-references FILE "uuid:<lightcontroller>" --mood <SID|Name> --output json
+lox config lighting set-mood-mix FILE "uuid:<lightcontroller>" --mood <SID|Name> --no-mix
+lox config lighting set-mood-skip FILE "uuid:<lightcontroller>" --mood <SID|Name> --skip
+lox config lighting set-mood-display-name FILE "uuid:<lightcontroller>" --mood <SID|Name> --name "LATE EVENING"
+```
+
+- Reference inspection is read-only: actual stored SID, raw OpM/ScMv and
+  zero-based visited numeric matches in the available ScMv prefix bounded by
+  supported OpM count. Preserve raw spellings and opaque unvisited tails.
+  Missing/empty vectors mean no visited references; unsupported needed values
+  remain explicitly unresolved, not empty/defaulted. Exact direct selection,
+  supported positive sibling SIDs and unique selected numeric SID are required;
+  ambiguous containers/identity fail. Num is reported, not reconciled/imported.
+  Quiet/no-header retain data and limitation diagnostics. No save/stamps,
+  writeability, native import, full edit admission or GUI/runtime inference.
+- Rename supports ASCII letters/digits with ordinary internal spaces and a
+  letter/digit at each end. It rejects unmodeled normalization/Unicode rather
+  than trimming, converting or silently defaulting a name. Duplicate new names
+  are native-compatible; later ambiguous Name selectors need an exact SID.
+- Mix requires exactly `--mix` or `--no-mix`, SID1..31, nonnegative CID
+  outside12..19 or omitted effective0, ASCII case variants of `MixMod=true/false` or omission, and unique selected
+  numeric SID. Omitted MixMod has recovered default false and stays omitted
+  on no-op. Omitted CID stays omitted. Role-dependent CID12..19, missing/opaque SIDs,
+  unsupported explicit CIDs and unsupported
+  explicit flags remain rejected. Do not invent role/cohort state.
+- Skip requires exactly `--skip` or `--no-skip` and changes only `SkipNext`.
+  The native checkbox is inverted: checked means included (`false`).
+  Omission means false and stays omitted on no-op; unsupported explicit values
+  fail instead of defaulting. Requires a unique positive numeric selected SID;
+  MixMod's SID1..31/CID12..19 restrictions do not apply to this checkbox.
+- Native ASCII case variants such as TRUE/FaLsE are supported for these flags
+  and read-only option inspection. No-op preserves exact spelling; numeric,
+  space-padded or opaque values remain rejected/unresolved rather than false.
+- Only the requested selected field changes. No Q1/HCL, ID, output, sequence or
+  role normalization; raw packed-color editing stays a separate operation.
+  `--room`/`--save-as` and JSON/CSV are supported.
+- Display-name editing changes only SName, not Name. Use uppercase ASCII
+  letters/digits with internal spaces and alphanumeric edges, or `--clear`.
+  Never silently uppercase/transliterate unsupported input. Clear is explicit
+  empty storage, not inherited-label or hardware-display parity.
+  `--normalize-ascii` explicitly enables native lowercase ASCII conversion only;
+  JSON reports `normalized_from`. No trim/punctuation/Unicode approximation,
+  no combination with --clear, and equivalent normalized no-op preserves bytes.
+- Option inspection is read-only: raw/effective/default flag/text values,
+  inverse cycling and bounded mix projection. Role-dependent checked state
+  stays unknown. ReadOnly is stored metadata, not full GUI permission.
+  Unsupported explicit flags stay unresolved; no default insertion occurs.
+  IID is a numeric icon reference, not an input binding. Catalog/image mapping
+  remains unresolved; never use its integer as an Energy icon GUID or infer
+  an input-clear/icon-clear operation from its model default0.
+- Inspection reports numeric duplicate positive SIDs/nonzero CIDs in one
+  direct collection; repeated CID0 is allowed. No normalization/repair or
+  complete import/editability admission follows from these diagnostics.
 
 ### Add a Virtual Input (HTTP/jdev push target)
 

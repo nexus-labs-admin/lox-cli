@@ -1,6 +1,152 @@
+use super::lighting::LightingMoodCreationPreview;
+use super::schema::Diagnostic;
 use super::{ConfigEditor, MoodInfo, MqttTopic, WireInfo};
 use anyhow::Result;
+use lox_core::configuration::editor::{MoodInventoryError, UnwireError};
+use serde::Serialize;
+use std::collections::BTreeMap;
 use xmltree::Element;
+
+#[derive(Debug, Serialize)]
+pub struct SpliceSelection {
+    pub path: Vec<usize>,
+    pub attributes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpliceReference {
+    pub child_index: usize,
+    pub attributes: BTreeMap<String, String>,
+    pub discarded_children: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpliceActorPreview {
+    pub selected: SpliceSelection,
+    pub actor: Option<SpliceSelection>,
+    pub outputref: SpliceSelection,
+    pub source_requested: String,
+    pub source_stored: String,
+    pub source_is_output: Option<bool>,
+    pub source_page: Option<String>,
+    pub connector_path: Vec<usize>,
+    pub connector_created: bool,
+    pub connector_uuid_ephemeral: bool,
+    pub before_connector: Option<BTreeMap<String, String>>,
+    pub after_connector: BTreeMap<String, String>,
+    pub before_references: Vec<SpliceReference>,
+    pub after_references: Vec<SpliceReference>,
+    pub before_nio: Option<String>,
+    pub after_nio: Option<String>,
+    pub scope: &'static str,
+}
+
+struct SpliceActorPlan {
+    preview: SpliceActorPreview,
+    outputref_uuid: String,
+}
+
+fn wire_source(source: &str) -> &str {
+    source.strip_prefix("uuid:").unwrap_or(source).trim()
+}
+
+fn native_mood_identities(collection: &Element) -> Result<(i64, i64)> {
+    let scenes: Vec<_> = collection
+        .children
+        .iter()
+        .filter_map(|node| node.as_element())
+        .filter(|scene| scene.name == "LightsceneC")
+        .collect();
+    let stored_ids = |field: &str| -> Result<Vec<i32>> {
+        scenes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, scene)| {
+                scene.attributes.get(field).map(|raw| (index, raw))
+            })
+            .map(|(index, raw)| {
+                raw.parse::<i32>().map_err(|_| {
+                    Diagnostic::new(
+                        "unsupported_mood_identity_value",
+                        &format!("LightscenesC/LightsceneC[{}]/@{field}", index + 1),
+                        "Cannot derive native-style IDs: a needed stored identity is not a signed-32-bit decimal. Existing moods were not changed; inspect the XML or supply explicit --sid/--cid overrides.",
+                    )
+                    .into()
+                })
+            })
+            .collect()
+    };
+    let used_sids = stored_ids("SID")?;
+    let sid = (1..=99)
+        .find(|candidate| !used_sids.contains(candidate))
+        .ok_or_else(|| {
+            Diagnostic::new(
+                "mood_identity_exhausted",
+                "LightscenesC/@SID",
+                "Cannot add a mood: all automatic SIDs in 1..99 are occupied. Existing moods were not changed. Supply an unused --sid explicitly.",
+            )
+        })?;
+    let cid = if sid <= 8 && !stored_ids("CID")?.contains(&(sid + 11)) {
+        sid + 11
+    } else {
+        0
+    };
+    Ok((i64::from(sid), i64::from(cid)))
+}
+
+fn native_mood_output_defaults(collection: &Element) -> Result<[i32; 18]> {
+    let mut defaults = [0; 18];
+    let Some(source) = collection
+        .children
+        .iter()
+        .filter_map(|node| node.as_element())
+        .find(|scene| scene.name == "LightsceneC")
+    else {
+        return Ok(defaults);
+    };
+    let width = match source.attributes.get("Outputs") {
+        None => 12,
+        Some(raw) => match raw.parse::<i32>() {
+            Ok(0) => 12,
+            Ok(width) if width > 0 => width as usize,
+            _ => {
+                return Err(Diagnostic::new(
+                    "unsupported_mood_output_width",
+                    "LightscenesC/LightsceneC[1]/@Outputs",
+                    "Cannot derive native-style defaults: the first mood's Outputs must be a nonnegative signed-32-bit integer, or absent. Existing storage was not changed.",
+                )
+                .into());
+            }
+        },
+    };
+    for (offset, value) in defaults.iter_mut().enumerate().skip(1) {
+        let index = offset + 1;
+        if index > width {
+            continue;
+        }
+        let key = format!("Q{index}");
+        if let Some(raw) = source.attributes.get(&key) {
+            let stored = raw.parse::<i32>().map_err(|_| {
+                Diagnostic::new(
+                    "unsupported_mood_output_value",
+                    &format!("LightscenesC/LightsceneC[1]/@{key}"),
+                    "Cannot derive native-style defaults from this output: expected a signed-32-bit decimal. Opaque, malformed and out-of-range values are not guessed or replaced.",
+                )
+            })?;
+            // Native append preserves the encoded high nibble (0xf0000000).
+            *value = stored & -0x1000_0000;
+        }
+    }
+    Ok(defaults)
+}
+
+struct LightingMoodCreationPlan {
+    path: Vec<usize>,
+    sid: i64,
+    cid: i64,
+    attributes: Vec<(String, String)>,
+    preview: LightingMoodCreationPreview,
+}
 
 impl ConfigEditor {
     /// Create an OutputRef to wire a control's output to a physical device.
@@ -303,145 +449,40 @@ impl ConfigEditor {
         ))
     }
 
-    /// Disconnect a connector (set its target UUID to empty/zero).
+    /// Disconnect using the shared legacy reference/UUID mutation.
     pub fn unwire(&mut self, selector: &str, connector_name: &str) -> Result<String> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element_mut(&path);
-        let title = elem.attributes.get("Title").cloned().unwrap_or_default();
-
-        let co = elem
-            .children
-            .iter_mut()
-            .find_map(|c| {
-                c.as_mut_element().filter(|e| {
-                    e.name == "Co"
-                        && e.attributes
-                            .get("K")
-                            .map(|k| k == connector_name)
-                            .unwrap_or(false)
-                })
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!("Connector '{}' not found on '{}'", connector_name, title)
+        let change = self
+            .kernel
+            .unwire_connector(selector, connector_name)
+            .map_err(|error| match error {
+                UnwireError::Edit(error) => super::editor_error(error),
+                error @ UnwireError::ConnectorMissing { .. } => anyhow::anyhow!("{error}"),
             })?;
-
-        let old = co.attributes.get("U").cloned().unwrap_or_default();
-        // Remove all <In> children (the wiring references)
-        let had_in_children = co
-            .children
-            .iter()
-            .any(|c| c.as_element().map(|e| e.name == "In").unwrap_or(false));
-        co.children
-            .retain(|c| !c.as_element().map(|e| e.name == "In").unwrap_or(false));
-        // Remove Nc attribute (connection count)
-        co.attributes.shift_remove("Nc");
-        // If no <In> children were present, the wiring was via Co U= attribute — clear it
-        if !had_in_children {
-            co.attributes.shift_remove("U");
-        }
-
         Ok(format!(
             "Unwired {}.{} (was {})",
-            title, connector_name, old
+            change.element.title,
+            change.connector,
+            change.previous_uuid.as_deref().unwrap_or_default()
         ))
     }
 
     /// List all connectors and their wiring for an element.
+    #[allow(dead_code)] // Compatibility bridge for callers holding a cached legacy editor.
     pub fn list_wires(&self, selector: &str) -> Result<Vec<WireInfo>> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element(&path);
-
-        let mut wires = Vec::new();
-        for child in &elem.children {
-            if let Some(co) = child.as_element()
-                && co.name == "Co"
-            {
-                let name = co.attributes.get("K").cloned().unwrap_or_default();
-                let target_uuid = co.attributes.get("U").cloned().unwrap_or_default();
-
-                // Classify direction
-                let direction =
-                    if name.starts_with('I') || name.starts_with("AI") || name == "Input" {
-                        "input"
-                    } else if name.starts_with('Q')
-                        || name.starts_with("AQ")
-                        || name.starts_with("Output")
-                    {
-                        "output"
-                    } else {
-                        "parameter"
-                    };
-
-                let has_in_children = co
-                    .children
-                    .iter()
-                    .any(|c| c.as_element().map(|e| e.name == "In").unwrap_or(false));
-                let connected = has_in_children
-                    || (!target_uuid.is_empty()
-                        && target_uuid != "00000000-0000-0000-0000000000000000");
-
-                wires.push(WireInfo {
-                    connector: name,
-                    direction: direction.to_string(),
-                    target_uuid,
-                    connected,
-                });
-            }
-        }
-        Ok(wires)
+        self.kernel
+            .connector_wiring(selector)
+            .map(|wires| wires.into_iter().map(Into::into).collect())
+            .map_err(super::editor_error)
     }
 
     /// List all MQTT topics (GenTSensor subscriptions + GenTActor publishes).
+    #[allow(dead_code)] // Compatibility for callers holding an already-edited DOM.
     pub fn list_mqtt_topics(&self) -> Vec<MqttTopic> {
-        let mut topics = Vec::new();
-        Self::collect_mqtt_topics(&self.root, &mut topics);
-        topics
-    }
-
-    fn collect_mqtt_topics(elem: &Element, topics: &mut Vec<MqttTopic>) {
-        if elem.name == "C"
-            && let Some(t) = elem.attributes.get("Type")
-            && (t == "GenTSensor" || t == "GenTActor")
-        {
-            let title = elem.attributes.get("Title").cloned().unwrap_or_default();
-            let direction = if t == "GenTSensor" {
-                "subscribe"
-            } else {
-                "publish"
-            };
-
-            // Get topic from SET properties
-            let mut topic = String::new();
-            let mut qos = String::new();
-            for child in &elem.children {
-                if let Some(set) = child.as_element()
-                    && set.name == "SET"
-                {
-                    for prop in &set.children {
-                        if let Some(p) = prop.as_element() {
-                            if p.name == "mqtt_topic" {
-                                topic = p.attributes.get("v").cloned().unwrap_or_default();
-                            }
-                            if p.name == "mqtt_qos" {
-                                qos = p.attributes.get("v").cloned().unwrap_or_default();
-                            }
-                        }
-                    }
-                }
-            }
-
-            topics.push(MqttTopic {
-                title,
-                direction: direction.to_string(),
-                topic,
-                qos,
-            });
-        }
-        for child in &elem.children {
-            if let Some(child_elem) = child.as_element() {
-                Self::collect_mqtt_topics(child_elem, topics);
-            }
-        }
+        self.kernel
+            .mqtt_topics()
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 
     /// Resolve stale InputRef wiring by updating connector UUIDs
@@ -749,54 +790,15 @@ impl ConfigEditor {
         source_uuid: &str,
         append: bool,
     ) -> Result<()> {
-        // Accept (and strip) a `uuid:` prefix on the source — the wire stores a
-        // bare connector UUID, never the selector form.
-        let source_uuid = source_uuid
-            .strip_prefix("uuid:")
-            .unwrap_or(source_uuid)
-            .trim();
-
-        // Validate the source is a real output connector (warn, don't fail —
-        // cross-file references and synthesized sources are legitimate).
-        match self.connector_dir_by_uuid(source_uuid) {
-            Some(true) => {}
-            Some(false) => eprintln!(
-                "⚠ Warning: source '{}' is an INPUT connector — wires flow FROM outputs TO inputs",
-                source_uuid
-            ),
-            None => eprintln!(
-                "⚠ Warning: source '{}' is not a known connector in this file (dangling reference?)",
-                source_uuid
-            ),
-        }
-
-        // Use standard selector matching (supports uuid:, gid:, Type:, and title)
-        let path = self.require_one(block_selector)?;
-
-        // Detect cross-page wiring: check if source is on a different Page than target
-        let target_page = self.find_page_for_path(&path);
-        let source_page = self.find_page_for_connector(source_uuid);
-        let cross_page = match (&target_page, &source_page) {
-            (Some(tp), Some(sp)) => tp != sp,
-            (_, None) => true, // source not on any page = cross-page
-            _ => false,
-        };
-
-        // Validate: target connector should be Input or Parameter, not Output
-        let elem = self.get_element(&path);
-        let block_type = elem.attributes.get("Type").cloned().unwrap_or_default();
-        if let Some(io_type) = Self::connector_io_type(&block_type, conn_key)
-            && io_type == "O"
-        {
-            eprintln!(
-                "⚠ Warning: wiring TO output connector '{}.{}' — normally you wire TO inputs, FROM outputs",
-                block_selector, conn_key
-            );
-        }
-
-        // Pre-fetch serial before mutable borrow (needed for auto-creating connectors)
-        let serial = self.find_miniserver_serial().unwrap_or_default();
-
+        let source_uuid = wire_source(source_uuid);
+        let (path, cross_page, serial) =
+            self.wire_connector_target(block_selector, conn_key, source_uuid)?;
+        let block_type = self
+            .get_element(&path)
+            .attributes
+            .get("Type")
+            .cloned()
+            .unwrap_or_default();
         let elem = self.get_element_mut(&path);
 
         // Collect available connectors for error message
@@ -917,6 +919,57 @@ impl ConfigEditor {
         Ok(())
     }
 
+    // Shared read-only prelude preserves source warnings and target resolution order.
+    fn wire_connector_target(
+        &self,
+        block_selector: &str,
+        conn_key: &str,
+        source_uuid: &str,
+    ) -> Result<(Vec<usize>, bool, String)> {
+        // Validate the source is a real output connector (warn, don't fail —
+        // cross-file references and synthesized sources are legitimate).
+        match self.connector_dir_by_uuid(source_uuid) {
+            Some(true) => {}
+            Some(false) => eprintln!(
+                "⚠ Warning: source '{}' is an INPUT connector — wires flow FROM outputs TO inputs",
+                source_uuid
+            ),
+            None => eprintln!(
+                "⚠ Warning: source '{}' is not a known connector in this file (dangling reference?)",
+                source_uuid
+            ),
+        }
+
+        // Use standard selector matching (supports uuid:, gid:, Type:, and title)
+        let path = self.require_one(block_selector)?;
+
+        // Detect cross-page wiring: check if source is on a different Page than target
+        let target_page = self.find_page_for_path(&path);
+        let source_page = self.find_page_for_connector(source_uuid);
+        let cross_page = match (&target_page, &source_page) {
+            (Some(tp), Some(sp)) => tp != sp,
+            (_, None) => true, // source not on any page = cross-page
+            _ => false,
+        };
+
+        // Validate: target connector should be Input or Parameter, not Output
+        let elem = self.get_element(&path);
+        let block_type = elem.attributes.get("Type").cloned().unwrap_or_default();
+        if let Some(io_type) = Self::connector_io_type(&block_type, conn_key)
+            && io_type == "O"
+        {
+            eprintln!(
+                "⚠ Warning: wiring TO output connector '{}.{}' — normally you wire TO inputs, FROM outputs",
+                block_selector, conn_key
+            );
+        }
+
+        // Pre-fetch serial before mutable borrow (needed for auto-creating connectors)
+        let serial = self.find_miniserver_serial().unwrap_or_default();
+
+        Ok((path, cross_page, serial))
+    }
+
     /// Find which Page UUID a path belongs to (walks up the path to find a Page ancestor).
     fn find_page_for_path(&self, path: &[usize]) -> Option<String> {
         // Walk path from root, check if any ancestor is a Page
@@ -950,9 +1003,29 @@ impl ConfigEditor {
     /// OutputRef's `AQ` — in which case the driving OutputRef is found
     /// automatically. The OutputRef's `AI` source is replaced with `source_uuid`.
     pub fn splice_actor(&mut self, selector: &str, source_uuid: &str) -> Result<String> {
+        let plan = self.plan_splice_actor(selector, source_uuid)?;
+        self.apply_splice_actor(&plan);
+        Ok(plan.outputref_uuid)
+    }
+
+    pub fn preview_splice_actor(
+        &self,
+        selector: &str,
+        source_uuid: &str,
+    ) -> Result<SpliceActorPreview> {
+        Ok(self.plan_splice_actor(selector, source_uuid)?.preview)
+    }
+
+    fn plan_splice_actor(&self, selector: &str, source_uuid: &str) -> Result<SpliceActorPlan> {
         let path = self.require_one(selector)?;
         let elem = self.get_element(&path);
         let block_type = elem.attributes.get("Type").cloned().unwrap_or_default();
+        let selection = || SpliceSelection {
+            path: path.clone(),
+            attributes: elem.attributes.clone().into_iter().collect(),
+        };
+        let selected = selection();
+        let actor = (block_type != "OutputRef").then(selection);
 
         let outputref_uuid = if block_type == "OutputRef" {
             elem.attributes
@@ -999,8 +1072,153 @@ impl ConfigEditor {
         };
 
         let sel = format!("uuid:{outputref_uuid}");
-        self.wire_connector(&sel, "AI", source_uuid, false)?;
-        Ok(outputref_uuid)
+        let source = wire_source(source_uuid);
+        let (target_path, cross_page, serial) = self.wire_connector_target(&sel, "AI", source)?;
+        let target = self.get_element(&target_path);
+        let available: Vec<_> = target
+            .children
+            .iter()
+            .filter_map(|c| c.as_element())
+            .filter(|e| e.name == "Co")
+            .filter_map(|e| e.attributes.get("K").cloned())
+            .collect();
+        let existing = target.children.iter().enumerate().find_map(|(index, c)| {
+            c.as_element()
+                .filter(|e| {
+                    e.name == "Co" && e.attributes.get("K").map(String::as_str) == Some("AI")
+                })
+                .map(|co| (index, co))
+        });
+        // AI cannot enter wire_connector's variadic I3..I20 branch.
+        let create_connector = if existing.is_none() {
+            let map = Self::connector_map();
+            let target_type = target
+                .attributes
+                .get("Type")
+                .map(String::as_str)
+                .unwrap_or("");
+            let default = map
+                .get(target_type)
+                .filter(|_| !target_type.is_empty())
+                .filter(|(connectors, _, _)| connectors.iter().any(|key| key == "AI"))
+                .map(|(_, defaults, _)| defaults.get("AI").cloned())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Connector 'AI' not found on '{}'. Available connectors: {}",
+                        sel,
+                        available.join(", ")
+                    )
+                })?;
+            Some((Self::loxone_uuid(&serial), default))
+        } else {
+            None
+        };
+        let before_connector = existing.map(|(_, co)| co.attributes.clone().into_iter().collect());
+        let before_references: Vec<_> = existing
+            .into_iter()
+            .flat_map(|(_, co)| co.children.iter().enumerate())
+            .filter_map(|(child_index, node)| {
+                node.as_element()
+                    .filter(|e| e.name == "In")
+                    .map(|e| SpliceReference {
+                        child_index,
+                        attributes: e.attributes.clone().into_iter().collect(),
+                        discarded_children: e.children.len(),
+                    })
+            })
+            .collect();
+        let mut after_connector: BTreeMap<String, String> =
+            before_connector.clone().unwrap_or_default();
+        if let Some((uuid, default)) = &create_connector {
+            after_connector.insert("K".into(), "AI".into());
+            after_connector.insert("U".into(), uuid.clone());
+            if let Some(default) = default {
+                after_connector.insert("Def".into(), default.clone());
+            }
+        }
+        after_connector.insert("Nc".into(), "1".into());
+        let mut reference = BTreeMap::from([("Input".into(), source.to_owned())]);
+        if cross_page {
+            reference.insert("FLG".into(), "2".into());
+        }
+        let mut connector_path = target_path.clone();
+        connector_path.push(existing.map_or(target.children.len(), |(index, _)| index));
+        let before_nio = target.attributes.get("Nio").cloned();
+        let after_nio = if create_connector.is_some() {
+            Some(
+                (target
+                    .children
+                    .iter()
+                    .filter(|c| c.as_element().is_some_and(|e| e.name == "Co"))
+                    .count()
+                    + 1)
+                .to_string(),
+            )
+        } else {
+            before_nio.clone()
+        };
+        Ok(SpliceActorPlan {
+            preview: SpliceActorPreview {
+                selected,
+                actor,
+                outputref: SpliceSelection {
+                    path: target_path,
+                    attributes: target.attributes.clone().into_iter().collect(),
+                },
+                source_requested: source_uuid.into(),
+                source_stored: source.into(),
+                source_is_output: self.connector_dir_by_uuid(source),
+                source_page: self.find_page_for_connector(source),
+                connector_path,
+                connector_created: create_connector.is_some(),
+                connector_uuid_ephemeral: create_connector.is_some(),
+                before_connector,
+                after_connector,
+                after_references: vec![SpliceReference {
+                    child_index: existing
+                        .map_or(0, |(_, co)| co.children.len() - before_references.len()),
+                    attributes: reference,
+                    discarded_children: 0,
+                }],
+                before_references,
+                before_nio,
+                after_nio,
+                scope: "existing CLI splice-actor AI reference replacement only; no native UI or physical-effect claim",
+            },
+            outputref_uuid,
+        })
+    }
+
+    fn apply_splice_actor(&mut self, plan: &SpliceActorPlan) {
+        if plan.preview.connector_created {
+            let mut co = Element::new("Co");
+            co.attributes
+                .insert("K".into(), plan.preview.after_connector["K"].clone());
+            co.attributes
+                .insert("U".into(), plan.preview.after_connector["U"].clone());
+            if let Some(default) = plan.preview.after_connector.get("Def") {
+                co.attributes.insert("Def".into(), default.clone());
+            }
+            let target = self.get_element_mut(&plan.preview.outputref.path);
+            target.children.push(xmltree::XMLNode::Element(co));
+            target
+                .attributes
+                .insert("Nio".into(), plan.preview.after_nio.clone().unwrap());
+        }
+        let co = self.get_element_mut(&plan.preview.connector_path);
+        co.children
+            .retain(|c| c.as_element().is_none_or(|e| e.name != "In"));
+        let attributes = &plan.preview.after_references[0].attributes;
+        let mut reference = Element::new("In");
+        reference
+            .attributes
+            .insert("Input".into(), attributes["Input"].clone());
+        if let Some(flag) = attributes.get("FLG") {
+            reference.attributes.insert("FLG".into(), flag.clone());
+        }
+        co.children.push(xmltree::XMLNode::Element(reference));
+        co.attributes
+            .insert("Nc".into(), plan.preview.after_connector["Nc"].clone());
     }
 
     /// Find the UUID of the block (`C`) that owns a connector with the given
@@ -1031,110 +1249,31 @@ impl ConfigEditor {
     }
 
     /// List the light scenes ("moods") defined on a LightController2.
-    ///
-    /// Moods are stored as `<LightsceneC>` children of the controller's
-    /// `<LightscenesC>` element. Each carries a `Name`, `UUID`, scene id (`SID`)
-    /// and the per-output values `Q1..Qn`.
     pub fn list_moods(&self, selector: &str) -> Result<Vec<MoodInfo>> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element(&path);
-        let block_type = elem.attributes.get("Type").cloned().unwrap_or_default();
-        if block_type != "LightController2" {
-            anyhow::bail!(
-                "'{selector}' is a {block_type}, not a LightController2 — moods only exist on light controllers"
-            );
-        }
-        let mut moods = Vec::new();
-        fn collect(elem: &Element, out: &mut Vec<MoodInfo>) {
-            if elem.name == "LightsceneC" {
-                out.push(MoodInfo {
-                    name: elem.attributes.get("Name").cloned().unwrap_or_default(),
-                    uuid: elem.attributes.get("UUID").cloned().unwrap_or_default(),
-                    sid: elem.attributes.get("SID").and_then(|s| s.parse().ok()),
-                    cid: elem.attributes.get("CID").and_then(|s| s.parse().ok()),
-                    q1: elem.attributes.get("Q1").cloned(),
-                });
-            }
-            for child in &elem.children {
-                if let Some(e) = child.as_element() {
-                    collect(e, out);
-                }
-            }
-        }
-        collect(elem, &mut moods);
-        Ok(moods)
-    }
-
-    /// Rewrite the color of an existing mood (`LightsceneC`) on a
-    /// `LightController2` by setting its per-output value `Q{output}`.
-    ///
-    /// `mood_ref` matches the mood by `SID` (numeric scene id) or `Name`.
-    /// `value` is the packed mood value (percent channels + `0x60000000`),
-    /// e.g. from `lox color encode --mood`. `output` is the 1-based Q index
-    /// (default 1 — the first/color output).
-    pub fn set_mood_color(
-        &mut self,
-        selector: &str,
-        mood_ref: &str,
-        output: usize,
-        value: i64,
-    ) -> Result<String> {
-        let path = self.require_one(selector)?;
-        let elem = self.get_element_mut(&path);
-        let block_type = elem.attributes.get("Type").cloned().unwrap_or_default();
-        if block_type != "LightController2" {
-            anyhow::bail!(
-                "'{selector}' is a {block_type}, not a LightController2 — moods only exist on light controllers"
-            );
-        }
-        let controller_title = elem.attributes.get("Title").cloned().unwrap_or_default();
-        let qkey = format!("Q{output}");
-
-        fn set_on_match(elem: &mut Element, mref: &str, qkey: &str, value: &str) -> bool {
-            if elem.name == "LightsceneC" {
-                let sid = elem.attributes.get("SID").map(|s| s.as_str()).unwrap_or("");
-                let name = elem
-                    .attributes
-                    .get("Name")
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                if sid == mref || name == mref {
-                    elem.attributes.insert(qkey.to_string(), value.to_string());
-                    return true;
-                }
-            }
-            for child in &mut elem.children {
-                if let Some(e) = child.as_mut_element()
-                    && set_on_match(e, mref, qkey, value)
-                {
-                    return true;
-                }
-            }
-            false
-        }
-
-        if set_on_match(elem, mood_ref, &qkey, &value.to_string()) {
-            Ok(format!(
-                "Set {qkey}={value} on mood '{mood_ref}' of LightController2 '{controller_title}'"
-            ))
-        } else {
-            anyhow::bail!(
-                "mood '{mood_ref}' not found on LightController2 '{controller_title}' (match by SID or Name)"
-            )
-        }
+        self.kernel
+            .list_moods_selected(selector)
+            .map(|moods| moods.into_iter().map(MoodInfo::from).collect())
+            .map_err(|error| match error {
+                MoodInventoryError::Edit(error) => super::editor_error(error),
+                error @ MoodInventoryError::NotLightController { .. } => anyhow::anyhow!("{error}"),
+            })
     }
 
     /// Create a brand-new mood (`LightsceneC`) on a `LightController2`.
     ///
-    /// Mirrors how Loxone Config appends a scene: a fresh `LightsceneC` is
+    /// A fresh `LightsceneC` is
     /// added to the controller's `<LightscenesC>` container with a generated
-    /// UUID, the next free custom scene id (`SID`) and color id (`CID`), and
-    /// per-output values `Q1..Qn` (Q1 set to `value`, the rest 0). The
-    /// container's `Num` count is incremented.
+    /// UUID, native-style automatic scene id (`SID`) and color id (`CID`), and
+    /// 18 outputs for the recovered native append path. Q1 is set to `value`;
+    /// other outputs retain the first mood's encoded type nibble. The
+    /// container's `Num` is set to the resulting direct scene count.
+    /// This does not reproduce native import or whole-editor behavior.
     ///
-    /// Reserved SIDs (1/776/777/778 = Entspannen/Wecker/Viel Licht/Aus) are
-    /// skipped; custom moods start at SID=2 / CID=9. Pass `sid`/`cid` to
-    /// override. Returns `(name, uuid, sid, cid)`.
+    /// With no overrides, choose the lowest free SID in 1..99 and try only
+    /// CID=SID+11 for SID<=8; otherwise CID is zero. Exhaustion is an atomic
+    /// error, unlike native append's zero SID. Either override retains the
+    /// CLI's legacy max-custom-plus-one/base2/base9 allocation for its absent
+    /// partner. Returns `(name, uuid, sid, cid)`.
     pub fn add_mood(
         &mut self,
         selector: &str,
@@ -1143,10 +1282,42 @@ impl ConfigEditor {
         sid: Option<i64>,
         cid: Option<i64>,
     ) -> Result<(String, String, i64, i64)> {
+        let plan = self.plan_mood_creation(selector, name, value, sid, cid)?;
+        self.apply_mood_creation(&plan);
+        let attributes = &plan.preview.proposed_mood;
+        Ok((
+            attributes["Name"].clone(),
+            attributes["UUID"].clone(),
+            plan.sid,
+            plan.cid,
+        ))
+    }
+
+    /// Preview the existing creation operation without mutating or saving.
+    /// The planned UUID is ephemeral; separate invocations may generate a fresh UUID.
+    pub fn preview_mood_creation(
+        &self,
+        selector: &str,
+        name: &str,
+        value: i64,
+        sid: Option<i64>,
+        cid: Option<i64>,
+    ) -> Result<LightingMoodCreationPreview> {
+        Ok(self
+            .plan_mood_creation(selector, name, value, sid, cid)?
+            .preview)
+    }
+
+    fn plan_mood_creation(
+        &self,
+        selector: &str,
+        name: &str,
+        value: i64,
+        sid: Option<i64>,
+        cid: Option<i64>,
+    ) -> Result<LightingMoodCreationPlan> {
         const RESERVED_SIDS: [i64; 4] = [1, 776, 777, 778];
 
-        // Validate the target is a LightController2 and gather existing moods
-        // (immutable borrow) before mutating.
         let existing = self.list_moods(selector)?;
         if existing.iter().any(|m| m.name == name) {
             anyhow::bail!(
@@ -1155,101 +1326,125 @@ impl ConfigEditor {
             );
         }
 
-        // Next free custom SID: max custom SID + 1 (base 2).
-        let new_sid = match sid {
+        let path = self.require_one(selector)?;
+        let block = self.get_element(&path);
+        let collections: Vec<_> = block
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                node.as_element()
+                    .filter(|collection| collection.name == "LightscenesC")
+                    .map(|collection| (index, collection))
+            })
+            .collect();
+        let [(collection_index, collection)] = collections.as_slice() else {
+            return Err(Diagnostic::new(
+                "unsupported_mood_container_shape",
+                selector,
+                "Adding a mood requires exactly one direct LightscenesC collection. Inspect the XML before editing.",
+            )
+            .into());
+        };
+        let (new_sid, new_cid) = if sid.is_none() && cid.is_none() {
+            native_mood_identities(collection)?
+        } else {
+            let new_sid = match sid {
             Some(s) => s,
             None => existing
                 .iter()
                 .filter_map(|m| m.sid)
                 .filter(|s| !RESERVED_SIDS.contains(s))
                 .max()
-                .map(|m| m + 1)
+                .map(|m| {
+                    m.checked_add(1).ok_or_else(|| {
+                        Diagnostic::new(
+                            "mood_identity_exhausted",
+                            "LightscenesC/@SID",
+                            "Cannot add a mood: the CLI SID successor exceeds the supported integer range. Supply an unused --sid explicitly; existing moods were not changed.",
+                        )
+                    })
+                })
+                .transpose()?
                 .unwrap_or(2),
-        };
-        // Next free custom CID: max custom CID + 1 (base 9).
-        let new_cid = match cid {
+            };
+            let new_cid = match cid {
             Some(c) => c,
             None => existing
                 .iter()
                 .filter(|m| m.sid.map(|s| !RESERVED_SIDS.contains(&s)).unwrap_or(true))
                 .filter_map(|m| m.cid)
                 .max()
-                .map(|m| m + 1)
+                .map(|m| {
+                    m.checked_add(1).ok_or_else(|| {
+                        Diagnostic::new(
+                            "mood_identity_exhausted",
+                            "LightscenesC/@CID",
+                            "Cannot add a mood: the CLI CID successor exceeds the supported integer range. Supply --cid explicitly; existing moods were not changed.",
+                        )
+                    })
+                })
+                .transpose()?
                 .unwrap_or(9),
+            };
+            if existing.iter().any(|m| m.sid == Some(new_sid)) {
+                anyhow::bail!("SID {new_sid} is already in use on this LightController2");
+            }
+            (new_sid, new_cid)
         };
-        if existing.iter().any(|m| m.sid == Some(new_sid)) {
-            anyhow::bail!("SID {new_sid} is already in use on this LightController2");
-        }
-
+        let defaults = native_mood_output_defaults(collection)?;
+        let collection_index = *collection_index;
         let serial = self.find_miniserver_serial().unwrap_or_default();
         let uuid = Self::loxone_uuid(&serial);
-
-        let path = self.require_one(selector)?;
-        let elem = self.get_element_mut(&path);
-
-        // Locate the <LightscenesC> container, read its Outputs count, append
-        // the new scene and bump Num.
-        fn append_scene(
-            elem: &mut Element,
-            name: &str,
-            uuid: &str,
-            sid: i64,
-            cid: i64,
-            value: i64,
-        ) -> bool {
-            if elem.name == "LightscenesC" {
-                let outputs: usize = elem
-                    .attributes
-                    .get("Outputs")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(18);
-                let mut scene = Element::new("LightsceneC");
-                scene
-                    .attributes
-                    .insert("Name".to_string(), name.to_string());
-                scene
-                    .attributes
-                    .insert("UUID".to_string(), uuid.to_string());
-                scene
-                    .attributes
-                    .insert("Outputs".to_string(), outputs.to_string());
-                scene.attributes.insert("SID".to_string(), sid.to_string());
-                scene.attributes.insert("CID".to_string(), cid.to_string());
-                for q in 1..=outputs.max(1) {
-                    let v = if q == 1 {
-                        value.to_string()
-                    } else {
-                        "0".to_string()
-                    };
-                    scene.attributes.insert(format!("Q{q}"), v);
-                }
-                elem.children.push(xmltree::XMLNode::Element(scene));
-                let num: i64 = elem
-                    .attributes
-                    .get("Num")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-                elem.attributes
-                    .insert("Num".to_string(), (num + 1).to_string());
-                return true;
-            }
-            for child in &mut elem.children {
-                if let Some(e) = child.as_mut_element()
-                    && append_scene(e, name, uuid, sid, cid, value)
-                {
-                    return true;
-                }
-            }
-            false
+        let mut attributes = Vec::new();
+        for (key, value) in [
+            ("Name", name.to_string()),
+            ("UUID", uuid.clone()),
+            ("Outputs", defaults.len().to_string()),
+            ("SID", new_sid.to_string()),
+            ("CID", new_cid.to_string()),
+        ] {
+            attributes.push((key.into(), value));
         }
-
-        if append_scene(elem, name, &uuid, new_sid, new_cid, value) {
-            Ok((name.to_string(), uuid, new_sid, new_cid))
-        } else {
-            anyhow::bail!(
-                "could not find a <LightscenesC> scene container on LightController2 '{selector}'"
-            )
+        for (offset, default) in defaults.into_iter().enumerate() {
+            attributes.push((
+                format!("Q{}", offset + 1),
+                if offset == 0 {
+                    value.to_string()
+                } else {
+                    default.to_string()
+                },
+            ));
         }
+        let preview = LightingMoodCreationPreview {
+            scope: "stored_mood_creation",
+            controller_uuid: block.attributes.get("U").cloned(),
+            controller_title: block.attributes.get("Title").cloned(),
+            collection_path: vec![collection_index],
+            container_created: false,
+            before_num: collection.attributes.get("Num").cloned(),
+            after_num: (super::lighting::direct_mood_count(collection) + 1).to_string(),
+            proposed_mood: attributes.iter().cloned().collect(),
+        };
+        let mut path = path;
+        path.push(collection_index);
+        Ok(LightingMoodCreationPlan {
+            path,
+            sid: new_sid,
+            cid: new_cid,
+            attributes,
+            preview,
+        })
+    }
+
+    fn apply_mood_creation(&mut self, plan: &LightingMoodCreationPlan) {
+        let mut scene = Element::new("LightsceneC");
+        scene.attributes.extend(plan.attributes.iter().cloned());
+        let collection = self.get_element_mut(&plan.path);
+        collection.children.push(xmltree::XMLNode::Element(scene));
+        collection
+            .attributes
+            .insert("Num".into(), plan.preview.after_num.clone());
     }
 
     /// Find which Page contains a connector UUID.
@@ -1327,6 +1522,206 @@ impl ConfigEditor {
     }
 }
 
+#[cfg(test)]
+mod splice_actor_tests {
+    use super::*;
+
+    const XML: &str = r#"<ControlList>
+      <C Type="Document" U="doc" Date="old" DateS="opaque"/>
+      <C Type="Place" U="room" Title="Kitchen"/>
+      <C Type="Page" U="p1">
+        <C Type="OutputRef" U="oref" Title="Bridge" gid="bridge" Nio="+003">
+          <Co K="AI" U="ai" Def="opaque" Nc="+0002" Future="keep">
+            <In Input=" old " FLG="01" Future="discard"><Unknown/></In>
+            <Keep Value="retain"/>
+            <In FLG=""/>
+          </Co>
+          <Co K="AI" U="duplicate-ai"><In Input="untouched"/></Co>
+          <Co K="AQ" U="oref-aq"/>
+        </C>
+        <C Type="FutureActor" U="actor" Title="Lamp">
+          <Co K="I"><In/><In Input="oref-aq"/><In Input="ignored"/></Co>
+          <Co K="AI"><In Input="also-ignored"/></Co>
+          <IoData Pr="room"/>
+        </C>
+        <C Type="Constant" U="same"><Co K="AQ" U="source"/><Co K="Input" U="input"/></C>
+      </C>
+      <C Type="Page" U="p2"><C Type="Constant" U="other"><Co K="AQ" U="remote"/></C></C>
+      <C Type="OutputRef" U="oref" Title="Bridge mirror"><Co K="AI"><In Input="mirror-untouched"/></Co></C>
+    </ControlList>"#;
+
+    #[test]
+    fn splice_preview_preserves_resolution_order_raw_references_and_low_level_writer() {
+        for selector in [
+            "uuid:oref",
+            "gid:BRIDGE",
+            "Type:OutputRef",
+            "brid",
+            "uuid:actor",
+            "lamp [Kitchen]",
+        ] {
+            for (source, stored, flag) in [
+                ("uuid: source ", "source", None),
+                ("remote", "remote", Some("2")),
+                ("input", "input", None),
+                ("unknown", "unknown", Some("2")),
+                ("", "", Some("2")),
+                (" uuid:source ", "uuid:source", Some("2")),
+            ] {
+                let mut editor = ConfigEditor::load(XML.as_bytes()).unwrap();
+                let before = format!("{:?}", editor.root);
+                let preview = editor.preview_splice_actor(selector, source).unwrap();
+                assert_eq!(format!("{:?}", editor.root), before);
+                assert_eq!(preview.outputref.attributes["U"], "oref");
+                assert_eq!(preview.source_requested, source);
+                assert_eq!(preview.source_stored, stored);
+                assert_eq!(preview.before_references.len(), 2);
+                assert_eq!(preview.before_references[0].attributes["Input"], " old ");
+                assert_eq!(preview.before_references[0].attributes["FLG"], "01");
+                assert_eq!(preview.before_references[0].discarded_children, 1);
+                assert!(
+                    !preview.before_references[1]
+                        .attributes
+                        .contains_key("Input")
+                );
+                assert_eq!(preview.before_references[1].attributes["FLG"], "");
+                assert_eq!(preview.before_connector.as_ref().unwrap()["Nc"], "+0002");
+                assert_eq!(preview.after_connector["Nc"], "1");
+                assert_eq!(preview.before_nio, preview.after_nio);
+                assert_eq!(preview.after_references[0].attributes["Input"], stored);
+                assert_eq!(
+                    preview.after_references[0]
+                        .attributes
+                        .get("FLG")
+                        .map(String::as_str),
+                    flag
+                );
+                assert_eq!(preview.after_references[0].child_index, 1);
+                let mut low_level = ConfigEditor::load(XML.as_bytes()).unwrap();
+                low_level
+                    .wire_connector("uuid:oref", "AI", source, false)
+                    .unwrap();
+                assert_eq!(editor.splice_actor(selector, source).unwrap(), "oref");
+                assert_eq!(editor.to_bytes().unwrap(), low_level.to_bytes().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn splice_plan_keeps_sparse_creation_and_non_outputref_owner_admission() {
+        for owner_type in ["OutputRef", "InputRef", "StateV", "Future"] {
+            let xml = format!(
+                r#"<ControlList>
+                <C Type="{owner_type}" U="owner" Nio="opaque"><Co K="AQ" U="aq"/></C>
+                <C U="actor"><Co K="AI"><In Input="aq"/></Co></C>
+            </ControlList>"#
+            );
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let plan = editor.plan_splice_actor("uuid:actor", "unknown");
+            assert_eq!(format!("{:?}", editor.root), before);
+            if matches!(owner_type, "StateV" | "Future") {
+                let error = plan.err().unwrap().to_string();
+                assert_eq!(
+                    error,
+                    "Connector 'AI' not found on 'uuid:owner'. Available connectors: AQ"
+                );
+                assert_eq!(
+                    editor
+                        .splice_actor("uuid:actor", "unknown")
+                        .unwrap_err()
+                        .to_string(),
+                    error
+                );
+                continue;
+            }
+            let plan = plan.unwrap();
+            assert_eq!(plan.preview.outputref.attributes["Type"], owner_type);
+            assert!(plan.preview.connector_created);
+            assert!(plan.preview.connector_uuid_ephemeral);
+            assert!(plan.preview.before_connector.is_none());
+            assert!(plan.preview.before_references.is_empty());
+            assert_eq!(plan.preview.before_nio.as_deref(), Some("opaque"));
+            assert_eq!(plan.preview.after_nio.as_deref(), Some("2"));
+            editor.apply_splice_actor(&plan);
+            let co = editor.get_element(&plan.preview.connector_path);
+            assert_eq!(
+                co.attributes
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<BTreeMap<_, _>>(),
+                plan.preview.after_connector
+            );
+            let mut low_level = ConfigEditor::load(xml.as_bytes()).unwrap();
+            low_level
+                .wire_connector("uuid:owner", "AI", "unknown", false)
+                .unwrap();
+            low_level
+                .get_element_mut(&plan.preview.connector_path)
+                .attributes
+                .insert("U".into(), co.attributes["U"].clone());
+            assert_eq!(editor.to_bytes().unwrap(), low_level.to_bytes().unwrap());
+        }
+    }
+
+    #[test]
+    fn splice_preview_preserves_ordered_failures_first_actor_source_and_noop_replacement() {
+        for (xml, selector, expected) in [
+            (
+                r#"<ControlList><C Type="OutputRef" Title="Bridge"/></ControlList>"#,
+                "Bridge",
+                "OutputRef 'Bridge' has no UUID",
+            ),
+            (
+                r#"<ControlList><C Type="Future" U="a"/></ControlList>"#,
+                "uuid:a",
+                "'uuid:a' (type Future) has no wired I/AI input",
+            ),
+            (
+                r#"<ControlList><C U="a"><Co K="I"><In Input="missing"/><In Input="known"/></Co></C><C Type="OutputRef" U="o"><Co K="AQ" U="known"/></C></ControlList>"#,
+                "uuid:a",
+                "could not find an OutputRef whose AQ (missing) drives 'uuid:a'",
+            ),
+            (
+                r#"<ControlList><C Type="OutputRef" U="a" Title="Bridge"/><C Type="OutputRef" U="b" Title="Bridge"/></ControlList>"#,
+                "Bridge",
+                "Selector 'Bridge' matches 2 elements",
+            ),
+        ] {
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let preview = editor
+                .preview_splice_actor(selector, "unknown")
+                .unwrap_err()
+                .to_string();
+            let writer = editor
+                .splice_actor(selector, "unknown")
+                .unwrap_err()
+                .to_string();
+            assert_eq!(preview, writer);
+            assert!(preview.contains(expected), "{preview}");
+            assert_eq!(format!("{:?}", editor.root), before);
+        }
+        let xml = r#"<ControlList><C Type="OutputRef" U="o"><Co K="AI" Nc="0001"><In Input="source" FLG="02"/></Co></C></ControlList>"#;
+        let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+        let preview = editor
+            .preview_splice_actor("uuid:o", "uuid:source")
+            .unwrap();
+        assert_eq!(preview.before_references[0].attributes["FLG"], "02");
+        assert_eq!(preview.after_references[0].attributes["FLG"], "2");
+        editor.splice_actor("uuid:o", "uuid:source").unwrap();
+        let repeated = editor.preview_splice_actor("uuid:o", "source").unwrap();
+        assert_eq!(
+            repeated.before_connector.as_ref().unwrap(),
+            &repeated.after_connector
+        );
+        assert_eq!(
+            repeated.before_references[0].attributes,
+            repeated.after_references[0].attributes
+        );
+    }
+}
+
 /// One AQ/Q connector of an InputRef, as seen by [`ConfigEditor::resolve_wiring`].
 struct InputRefPort {
     /// The InputRef's own object UUID.
@@ -1335,4 +1730,280 @@ struct InputRefPort {
     target: String,
     key: String,
     uuid: String,
+}
+
+#[cfg(test)]
+mod mood_creation_tests {
+    use super::*;
+
+    const XML: &str = r#"<ControlList>
+      <C Type="Document" U="doc" Date="old" DateS="opaque"/>
+      <C Type="LightController2" U="lighting" Title="Lamp" CapAI0="opaque">
+        <Unknown><LightsceneC UUID="duplicate" Name="Nested" SID="1" CID="12"/></Unknown>
+        <LightscenesC Num="bad" Outputs="future" Future="retain">
+          <Unknown><LightsceneC UUID="duplicate" Name="Nested2"/></Unknown>
+          <LightsceneC UUID="duplicate" Name="First" SID="2" CID="9" Outputs="3"
+            Q1="opaque" Q2="-1" Q3="1610612778" Q18="future"><SeqConf Future="keep"/></LightsceneC>
+          <LightsceneC UUID="duplicate" Name="Second" SID="3" CID="10"/>
+        </LightscenesC>
+        <LSConfig OpM="opaque" ScMv="opaque"/><HCL T="2"/>
+      </C>
+    </ControlList>"#;
+
+    #[test]
+    fn lighting_creation_preview_and_application_use_one_identity_and_exact_attribute_plan() {
+        for (sid, cid, expected_sid, expected_cid) in [
+            (None, None, 1, 12),
+            (Some(20), None, 20, 11),
+            (None, Some(99), 4, 99),
+            (Some(776), Some(9), 776, 9),
+            (Some(-1), Some(-8), -1, -8),
+        ] {
+            let bytes = format!("\u{feff}{}\r\n", XML.replace('\n', "\r\n"));
+            let mut editor = ConfigEditor::load(bytes.as_bytes()).unwrap();
+            let before = editor.to_bytes().unwrap();
+            let original = ConfigEditor::load(bytes.as_bytes()).unwrap();
+            let plan = editor
+                .plan_mood_creation("uuid:lighting", " µ,\"B ", i64::MIN, sid, cid)
+                .unwrap();
+            assert_eq!(editor.to_bytes().unwrap(), before);
+            assert_eq!(plan.preview.before_num.as_deref(), Some("bad"));
+            assert_eq!(plan.preview.after_num, "3");
+            assert!(!plan.preview.container_created);
+            let attributes = &plan.preview.proposed_mood;
+            assert_eq!(attributes["Name"], " µ,\"B ");
+            assert_eq!(attributes["SID"], expected_sid.to_string());
+            assert_eq!(attributes["CID"], expected_cid.to_string());
+            assert_eq!(attributes["Outputs"], "18");
+            assert_eq!(attributes["Q1"], i64::MIN.to_string());
+            assert_eq!(attributes["Q2"], "-268435456");
+            assert_eq!(attributes["Q3"], "1610612736");
+            assert_eq!(attributes["Q18"], "0");
+            assert_eq!(attributes.len(), 23);
+            let public_preview = editor
+                .preview_mood_creation("uuid:lighting", " µ,\"B ", i64::MIN, sid, cid)
+                .unwrap();
+            assert_eq!(public_preview.after_num, "3");
+            assert_eq!(editor.to_bytes().unwrap(), before);
+
+            editor.apply_mood_creation(&plan);
+            let collection = editor.get_element(&plan.path);
+            let old_collection = original.get_element(&plan.path);
+            let scene = collection.children.last().unwrap().as_element().unwrap();
+            assert_eq!(scene.name, "LightsceneC");
+            assert!(scene.children.is_empty());
+            assert_eq!(
+                scene
+                    .attributes
+                    .iter()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+                attributes.iter().collect()
+            );
+            assert_eq!(
+                scene.attributes.keys().collect::<Vec<_>>(),
+                plan.attributes
+                    .iter()
+                    .map(|(key, _)| key)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                &collection.children[..collection.children.len() - 1],
+                old_collection.children
+            );
+            let mut expected = old_collection.attributes.clone();
+            expected.insert("Num".into(), "3".into());
+            assert_eq!(collection.attributes, expected);
+            let controller = original.require_one("uuid:lighting").unwrap();
+            let mut collection_path = controller;
+            collection_path.extend(&plan.preview.collection_path);
+            assert_eq!(collection_path, plan.path);
+            // Undo only the declared effects to prove the rest of the DOM stayed exact.
+            let collection = editor.get_element_mut(&plan.path);
+            collection.children.pop();
+            collection.attributes.insert("Num".into(), "bad".into());
+            assert_eq!(editor.to_bytes().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn lighting_creation_preview_keeps_existing_empty_sparse_and_reader_width_defaults() {
+        for (source, q2, q13) in [
+            ("<Unknown/>", "0", "0"),
+            ("<LightsceneC Q2=\"-1\" Q13=\"future\"/>", "-268435456", "0"),
+            ("<LightsceneC Outputs=\"0\" Q2=\"-1\"/>", "-268435456", "0"),
+            ("<LightsceneC Outputs=\"1\" Q2=\"future\"/>", "0", "0"),
+            (
+                "<LightsceneC Outputs=\"20\" Q13=\"1610612778\" Q19=\"future\"/>",
+                "0",
+                "1610612736",
+            ),
+        ] {
+            let xml = format!(
+                "<ControlList><C Type=\"LightController2\" U=\"lighting\"><LightscenesC Outputs=\"opaque\">{source}</LightscenesC></C></ControlList>"
+            );
+            let editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = editor.to_bytes().unwrap();
+            let preview = editor
+                .preview_mood_creation(
+                    "uuid:lighting",
+                    if source == "<Unknown/>" { "" } else { "New" },
+                    42,
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert!(preview.before_num.is_none());
+            assert_eq!(
+                preview.after_num,
+                if source == "<Unknown/>" { "1" } else { "2" }
+            );
+            assert_eq!(preview.proposed_mood["Q2"], q2);
+            assert_eq!(preview.proposed_mood["Q13"], q13);
+            assert!(!preview.proposed_mood.contains_key("Q19"));
+            assert_eq!(editor.to_bytes().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn lighting_creation_preview_and_writer_share_existing_ordered_errors() {
+        let occupied = (1..=99)
+            .map(|sid| format!("<LightsceneC SID=\"{sid}\"/>"))
+            .collect::<String>();
+        let collection = |scenes: &str| {
+            format!(
+                "<ControlList><C Type=\"LightController2\" U=\"lighting\"><LightscenesC>{scenes}</LightscenesC></C></ControlList>"
+            )
+        };
+        for (xml, selector, name, sid, cid, message) in [
+            (
+                collection("<LightsceneC/>"),
+                "uuid:lighting",
+                "",
+                None,
+                None,
+                "already exists",
+            ),
+            (
+                XML.to_owned(),
+                "uuid:missing",
+                "First",
+                Some(2),
+                None,
+                "uuid:missing",
+            ),
+            (
+                XML.replace("LightController2", "Switch"),
+                "uuid:lighting",
+                "First",
+                Some(2),
+                None,
+                "not a LightController2",
+            ),
+            (
+                XML.replace(
+                    "</C>\n    </ControlList>",
+                    "</C><C Type=\"LightController2\" Title=\"Lamp\" U=\"other\"/></ControlList>",
+                ),
+                "Lamp",
+                "First",
+                None,
+                None,
+                "matches 2 elements",
+            ),
+            (
+                XML.replace("<LightscenesC Num=", "<LightscenesC/><LightscenesC Num="),
+                "uuid:lighting",
+                "Nested",
+                Some(2),
+                None,
+                "already exists",
+            ),
+            (
+                "<ControlList><C Type=\"LightController2\" U=\"lighting\"/></ControlList>".into(),
+                "uuid:lighting",
+                "New",
+                None,
+                None,
+                "unsupported_mood_container_shape",
+            ),
+            (
+                XML.replace("<LightscenesC Num=", "<LightscenesC/><LightscenesC Num="),
+                "uuid:lighting",
+                "New",
+                None,
+                None,
+                "unsupported_mood_container_shape",
+            ),
+            (
+                collection("<LightsceneC SID=\"future\" Outputs=\"bad\"/>"),
+                "uuid:lighting",
+                "New",
+                None,
+                None,
+                "unsupported_mood_identity_value",
+            ),
+            (
+                collection(&occupied),
+                "uuid:lighting",
+                "New",
+                None,
+                None,
+                "mood_identity_exhausted",
+            ),
+            (
+                XML.replace("Q2=\"-1\"", "Q2=\"future\""),
+                "uuid:lighting",
+                "New",
+                Some(2),
+                Some(9),
+                "SID 2 is already in use",
+            ),
+            (
+                collection("<LightsceneC SID=\"9223372036854775807\"/>"),
+                "uuid:lighting",
+                "New",
+                None,
+                Some(1),
+                "mood_identity_exhausted",
+            ),
+            (
+                collection("<LightsceneC SID=\"2\" CID=\"9223372036854775807\"/>"),
+                "uuid:lighting",
+                "New",
+                Some(2),
+                None,
+                "mood_identity_exhausted",
+            ),
+            (
+                XML.replace("Outputs=\"3\"", "Outputs=\"bad\""),
+                "uuid:lighting",
+                "New",
+                None,
+                None,
+                "unsupported_mood_output_width",
+            ),
+            (
+                XML.replace("Q2=\"-1\"", "Q2=\"2147483648\""),
+                "uuid:lighting",
+                "New",
+                None,
+                None,
+                "unsupported_mood_output_value",
+            ),
+        ] {
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = editor.to_bytes().unwrap();
+            let preview = editor
+                .preview_mood_creation(selector, name, 42, sid, cid)
+                .unwrap_err()
+                .to_string();
+            let writer = editor
+                .add_mood(selector, name, 42, sid, cid)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(preview, writer);
+            assert!(preview.contains(message), "{preview}");
+            assert_eq!(editor.to_bytes().unwrap(), before);
+        }
+    }
 }

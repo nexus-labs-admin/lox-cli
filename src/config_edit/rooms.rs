@@ -1,8 +1,197 @@
 use super::ConfigEditor;
 use anyhow::{Result, bail};
+use std::collections::BTreeMap;
 use xmltree::Element;
 
+#[derive(Debug, serde::Serialize)]
+pub struct RoomAddElement {
+    pub path: Vec<usize>,
+    pub element_name: String,
+    pub attributes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RoomAddPreview {
+    pub name: String,
+    pub parent: RoomAddElement,
+    pub insert_after: Option<RoomAddElement>,
+    pub room: RoomAddElement,
+    pub uuid_ephemeral: bool,
+    pub report: String,
+    pub scope: &'static str,
+}
+
+struct RoomAddPlan {
+    attributes: Vec<(String, String)>,
+    preview: RoomAddPreview,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RoomRenameSelection {
+    pub path: Vec<usize>,
+    pub attributes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RoomRenamePreview {
+    pub selector: String,
+    pub selected: RoomRenameSelection,
+    pub uuid_source: RoomRenameSelection,
+    pub target: RoomRenameSelection,
+    pub before_title: Option<String>,
+    pub after_title: String,
+    pub changed: bool,
+    pub report: String,
+    pub scope: &'static str,
+}
+
+struct RoomRenamePlan {
+    preview: RoomRenamePreview,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ControlMoveSelector {
+    Type(String),
+    Title(String),
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ControlMoveRoomReference {
+    pub path: Vec<usize>,
+    pub attributes: BTreeMap<String, String>,
+    pub before_pr: Option<String>,
+    pub after_pr: String,
+    pub created: bool,
+    pub changed: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ControlMoveSelection {
+    pub path: Vec<usize>,
+    pub attributes: BTreeMap<String, String>,
+    pub io_data: Vec<ControlMoveRoomReference>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ControlMovePreview {
+    pub selector: ControlMoveSelector,
+    pub exclude: Vec<String>,
+    pub target_room: String,
+    pub room_uuid: String,
+    pub selected: Vec<ControlMoveSelection>,
+    pub count: usize,
+    pub changed: bool,
+    pub report: String,
+    pub scope: &'static str,
+}
+
+impl From<lox_core::configuration::editor::ControlMovePlan> for ControlMovePreview {
+    fn from(plan: lox_core::configuration::editor::ControlMovePlan) -> Self {
+        use lox_core::configuration::editor::ControlMoveSelector as CoreSelector;
+        let selector = match plan.selector {
+            CoreSelector::Type(value) => ControlMoveSelector::Type(value),
+            CoreSelector::Title(value) => ControlMoveSelector::Title(value),
+        };
+        let report = match &selector {
+            ControlMoveSelector::Type(tf) => format!(
+                "Moved {} {tf} items to '{}' ({})",
+                plan.count, plan.target_room, plan.room_uuid
+            ),
+            ControlMoveSelector::Title(title) => format!(
+                "Moved '{title}' to '{}' ({})",
+                plan.target_room, plan.room_uuid
+            ),
+        };
+        Self {
+            selector,
+            exclude: plan.exclude,
+            target_room: plan.target_room,
+            room_uuid: plan.room_uuid,
+            selected: plan
+                .selected
+                .into_iter()
+                .map(|selected| ControlMoveSelection {
+                    path: selected.path,
+                    attributes: selected.attributes,
+                    io_data: selected
+                        .io_data
+                        .into_iter()
+                        .map(|io| ControlMoveRoomReference {
+                            path: io.path,
+                            attributes: io.attributes,
+                            before_pr: io.before_pr,
+                            after_pr: io.after_pr,
+                            created: io.created,
+                            changed: io.changed,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            count: plan.count,
+            changed: plan.changed,
+            report,
+            scope: "Existing CLI IoData.Pr attribute edit only; no native UI or physical-effect claim",
+        }
+    }
+}
+
 impl ConfigEditor {
+    pub fn preview_room_rename(&self, selector: &str, name: &str) -> Result<RoomRenamePreview> {
+        Ok(self.plan_room_rename(selector, name)?.preview)
+    }
+
+    pub fn rename_room(&mut self, selector: &str, name: &str) -> Result<String> {
+        let plan = self.plan_room_rename(selector, name)?;
+        self.get_element_mut(&plan.preview.target.path)
+            .attributes
+            .insert("Title".to_string(), plan.preview.after_title);
+        Ok(plan.preview.report)
+    }
+
+    fn plan_room_rename(&self, selector: &str, name: &str) -> Result<RoomRenamePlan> {
+        let selected_path = self.require_one(selector)?;
+        let uuid = self
+            .get_element(&selected_path)
+            .attributes
+            .get("U")
+            .cloned()
+            .unwrap_or_default();
+        // Preserve the final UUID lookup's canonical mirror selection.
+        let target_path = self.require_one(&format!("uuid:{uuid}"))?;
+        let target = self.get_element(&target_path);
+        let before_title = target.attributes.get("Title").cloned();
+        let title = before_title.as_deref().unwrap_or_default();
+        let report = format!(
+            "Set {}.Title: {} → '{}'",
+            title,
+            before_title.as_deref().unwrap_or("(none)"),
+            name
+        );
+        let selection = |path: Vec<usize>| RoomRenameSelection {
+            attributes: self
+                .get_element(&path)
+                .attributes
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            path,
+        };
+        Ok(RoomRenamePlan {
+            preview: RoomRenamePreview {
+                selector: selector.to_owned(),
+                selected: selection(selected_path.clone()),
+                uuid_source: selection(selected_path),
+                target: selection(target_path),
+                changed: before_title.as_deref() != Some(name),
+                before_title,
+                after_title: name.to_owned(),
+                report,
+                scope: "Existing CLI Title attribute edit only; no native UI or physical-effect claim",
+            },
+        })
+    }
+
     /// Move all elements matching a type filter to a different room.
     /// Returns the number of elements moved.
     pub fn move_to_room(
@@ -11,78 +200,44 @@ impl ConfigEditor {
         target_room_name: &str,
         exclude_types: &[&str],
     ) -> Result<(usize, String)> {
-        // First, find the target room UUID
-        let room_uuid = self.find_room_uuid(target_room_name)?;
+        let plan = self
+            .kernel
+            .move_control(Some(type_filter), None, target_room_name, exclude_types)
+            .map_err(super::editor_error)?;
+        Ok((plan.count, plan.room_uuid))
+    }
 
-        // Collect paths to matching elements
-        let mut paths = Vec::new();
-        Self::collect_typed_with_iodata(
-            &self.root,
-            type_filter,
-            exclude_types,
-            &mut Vec::new(),
-            &mut paths,
-        );
+    pub fn preview_control_move(
+        &self,
+        type_filter: Option<&str>,
+        title: Option<&str>,
+        target_room: &str,
+        exclude: &[&str],
+    ) -> Result<ControlMovePreview> {
+        self.kernel
+            .plan_control_move(type_filter, title, target_room, exclude)
+            .map(ControlMovePreview::from)
+            .map_err(super::editor_error)
+    }
 
-        let count = paths.len();
-        for path in &paths {
-            let elem = self.get_element_mut(path);
-            // Find IoData child and update Pr attribute
-            for child in &mut elem.children {
-                if let Some(iodata) = child.as_mut_element()
-                    && iodata.name == "IoData"
-                {
-                    iodata
-                        .attributes
-                        .insert("Pr".to_string(), room_uuid.clone());
-                }
-            }
-        }
-
-        Ok((count, room_uuid))
+    pub fn move_control(
+        &mut self,
+        type_filter: Option<&str>,
+        title: Option<&str>,
+        target_room: &str,
+        exclude: &[&str],
+    ) -> Result<String> {
+        let plan = self
+            .kernel
+            .move_control(type_filter, title, target_room, exclude)
+            .map_err(super::editor_error)?;
+        Ok(ControlMovePreview::from(plan).report)
     }
 
     pub fn find_room_uuid(&self, room_name: &str) -> Result<String> {
-        let lower = room_name.to_lowercase();
-        let mut found = Vec::new();
-        Self::walk_rooms(&self.root, &lower, &mut found);
-        match found.len() {
-            0 => bail!("Room '{}' not found in config", room_name),
-            1 => Ok(found.into_iter().next().unwrap().0),
-            _ => {
-                // Try exact match
-                let exact: Vec<_> = found
-                    .iter()
-                    .filter(|(_uuid, name)| name.to_lowercase() == lower)
-                    .collect();
-                if exact.len() == 1 {
-                    Ok(exact[0].0.clone())
-                } else {
-                    bail!(
-                        "Multiple rooms match '{}': {:?}",
-                        room_name,
-                        found.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>()
-                    )
-                }
-            }
-        }
-    }
-
-    fn walk_rooms(elem: &Element, name_lower: &str, found: &mut Vec<(String, String)>) {
-        if elem.name == "C"
-            && let Some(t) = elem.attributes.get("Type")
-            && t == "Place"
-            && let (Some(uuid), Some(title)) =
-                (elem.attributes.get("U"), elem.attributes.get("Title"))
-            && title.to_lowercase().contains(name_lower)
-        {
-            found.push((uuid.clone(), title.clone()));
-        }
-        for child in &elem.children {
-            if let Some(child_elem) = child.as_element() {
-                Self::walk_rooms(child_elem, name_lower, found);
-            }
-        }
+        self.kernel
+            .find_room_uuid(room_name)
+            .map_err(super::editor_error)
     }
 
     /// Find a Page element by title (fuzzy substring match).
@@ -190,6 +345,7 @@ impl ConfigEditor {
         }
     }
 
+    #[cfg(test)]
     fn collect_typed_with_iodata(
         elem: &Element,
         type_filter: &str,
@@ -228,14 +384,21 @@ impl ConfigEditor {
 
     /// Add a new room (Place element).
     pub fn add_room(&mut self, name: &str) -> Result<String> {
-        // Check if room already exists
-        let mut existing = Vec::new();
-        Self::walk_rooms(&self.root, &name.to_lowercase(), &mut existing);
+        let plan = self.plan_room_add(name)?;
+        self.apply_room_add(&plan);
+        Ok(plan.preview.room.attributes["U"].clone())
+    }
+
+    pub fn preview_room_add(&self, name: &str) -> Result<RoomAddPreview> {
+        Ok(self.plan_room_add(name)?.preview)
+    }
+
+    fn plan_room_add(&self, name: &str) -> Result<RoomAddPlan> {
+        let existing = self.kernel.matching_rooms(&name.to_lowercase());
         if !existing.is_empty() {
             bail!("Room '{}' already exists", name);
         }
 
-        // Generate a UUID
         let uuid = format!(
             "{:08x}-{:04x}-{:04x}-ffff000000000000",
             rand::random::<u32>(),
@@ -243,7 +406,7 @@ impl ConfigEditor {
             rand::random::<u16>()
         );
 
-        // Find PlaceCaption or first Place and insert after
+        // The legacy writer uses the last matching direct child, not a nested caption.
         let mut insert_path = None;
         for (i, child) in self.root.children.iter().enumerate() {
             if let Some(elem) = child.as_element()
@@ -255,28 +418,48 @@ impl ConfigEditor {
             }
         }
 
-        let mut place = Element::new("C");
-        place
-            .attributes
-            .insert("Type".to_string(), "Place".to_string());
-        place.attributes.insert("V".to_string(), "175".to_string());
-        place.attributes.insert("U".to_string(), uuid.clone());
-        place
-            .attributes
-            .insert("Title".to_string(), name.to_string());
-        place
-            .attributes
-            .insert("WF".to_string(), "16384".to_string());
+        let attributes = vec![
+            ("Type".to_owned(), "Place".to_owned()),
+            ("V".to_owned(), "175".to_owned()),
+            ("U".to_owned(), uuid.clone()),
+            ("Title".to_owned(), name.to_owned()),
+            ("WF".to_owned(), "16384".to_owned()),
+        ];
+        let stored = |element: &Element, path| RoomAddElement {
+            path,
+            element_name: element.name.clone(),
+            attributes: element
+                .attributes
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        };
+        Ok(RoomAddPlan {
+            preview: RoomAddPreview {
+                name: name.to_owned(),
+                parent: stored(&self.root, vec![]),
+                insert_after: insert_path.map(|index| {
+                    stored(self.root.children[index].as_element().unwrap(), vec![index])
+                }),
+                room: RoomAddElement {
+                    path: vec![insert_path.map_or(self.root.children.len(), |index| index + 1)],
+                    element_name: "C".to_owned(),
+                    attributes: attributes.iter().cloned().collect(),
+                },
+                uuid_ephemeral: true,
+                report: format!("Added room '{}' (UUID: {})", name, uuid),
+                scope: "Existing CLI Place insertion only; generated UUID is ephemeral across invocations, not reserved for execution; no native UI or physical-effect claim",
+            },
+            attributes,
+        })
+    }
 
-        if let Some(idx) = insert_path {
-            self.root
-                .children
-                .insert(idx + 1, xmltree::XMLNode::Element(place));
-        } else {
-            self.root.children.push(xmltree::XMLNode::Element(place));
-        }
-
-        Ok(uuid)
+    fn apply_room_add(&mut self, plan: &RoomAddPlan) {
+        let mut place = Element::new(&plan.preview.room.element_name);
+        place.attributes.extend(plan.attributes.iter().cloned());
+        self.root
+            .children
+            .insert(plan.preview.room.path[0], xmltree::XMLNode::Element(place));
     }
 
     /// Add a new category to the config.
@@ -443,5 +626,954 @@ impl ConfigEditor {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod room_add_tests {
+    use super::*;
+
+    // Baseline add_room, with only its random UUID supplied by the test.
+    fn legacy_add(editor: &mut ConfigEditor, name: &str, uuid: &str) -> Result<String> {
+        let existing = editor.kernel.matching_rooms(&name.to_lowercase());
+        if !existing.is_empty() {
+            bail!("Room '{}' already exists", name);
+        }
+        let mut insert_path = None;
+        for (i, child) in editor.root.children.iter().enumerate() {
+            if let Some(elem) = child.as_element()
+                && elem.name == "C"
+                && let Some(t) = elem.attributes.get("Type")
+                && (t == "Place" || t == "PlaceCaption")
+            {
+                insert_path = Some(i);
+            }
+        }
+        let mut place = Element::new("C");
+        place.attributes.insert("Type".into(), "Place".into());
+        place.attributes.insert("V".into(), "175".into());
+        place.attributes.insert("U".into(), uuid.into());
+        place.attributes.insert("Title".into(), name.into());
+        place.attributes.insert("WF".into(), "16384".into());
+        if let Some(index) = insert_path {
+            editor
+                .root
+                .children
+                .insert(index + 1, xmltree::XMLNode::Element(place));
+        } else {
+            editor.root.children.push(xmltree::XMLNode::Element(place));
+        }
+        Ok(uuid.into())
+    }
+
+    fn assert_legacy_uuid(uuid: &str) {
+        let parts: Vec<_> = uuid.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|part| part.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 16]
+        );
+        assert_eq!(parts[3], "ffff000000000000");
+        assert!(parts[..3].iter().all(|part| {
+            part.bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }));
+    }
+
+    #[test]
+    fn room_add_private_plan_applies_exact_identity_attributes_and_legacy_insertion() {
+        for (xml, insertion, anchor) in [
+            (
+                r#"<ControlList Future="+003" U=""><C Type="PlaceCaption" U="first"/><C Type="Place" U="a" Title="Alpha"/><Unknown Ref="a"/><C Type="PlaceCaption" Title="" WF="+000"/><Tail/></ControlList>"#,
+                4,
+                Some(3),
+            ),
+            (
+                r#"<ControlList><C Type="Place" Title="missing UUID"/><C Type="Place" U="" Title=""/><Tail/></ControlList>"#,
+                2,
+                Some(1),
+            ),
+            (
+                r#"<ControlList><C Type="Page"><C Type="PlaceCaption"/><C Type="Place" U="a" Title="Alpha"/><IoData Pr="a" Cr="c"/><Co U="out" Def="+003"><In Input="ref" FLG="01"/></Co></C><Unknown/></ControlList>"#,
+                2,
+                None,
+            ),
+            (
+                r#"<FutureRoot Title="" Future="opaque"><C Type="place"/><Other Type="Place"/><C/><C Type="Future"><Unknown/></C></FutureRoot>"#,
+                4,
+                None,
+            ),
+            (
+                r#"<C Type="Place" U="root" Title="Root"><Unknown/></C>"#,
+                1,
+                None,
+            ),
+            (r#"<ControlList/>"#, 0, None),
+        ] {
+            let bytes = format!("\u{feff}{xml}\r\n");
+            let name = "  Grüße,\"室\"  ";
+            let mut editor = ConfigEditor::load(bytes.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let before_bytes = editor.to_bytes().unwrap();
+            let plan = editor.plan_room_add(name).unwrap();
+            let preview = &plan.preview;
+            assert_eq!(format!("{:?}", editor.root), before);
+            assert_eq!(editor.to_bytes().unwrap(), before_bytes);
+            assert_eq!(preview.parent.path, Vec::<usize>::new());
+            assert_eq!(preview.parent.element_name, editor.root.name);
+            assert_eq!(
+                preview.parent.attributes,
+                editor
+                    .root
+                    .attributes
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            );
+            assert_eq!(preview.room.path, [insertion]);
+            assert_eq!(
+                preview.insert_after.as_ref().map(|elem| elem.path[0]),
+                anchor
+            );
+            if let Some(anchor) = &preview.insert_after {
+                let actual = editor.get_element(&anchor.path);
+                assert_eq!(anchor.element_name, actual.name);
+                assert_eq!(
+                    anchor.attributes,
+                    actual
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                );
+            }
+            assert!(preview.uuid_ephemeral);
+            let uuid = &preview.room.attributes["U"];
+            assert_legacy_uuid(uuid);
+            assert_eq!(
+                preview.report,
+                format!("Added room '{name}' (UUID: {uuid})")
+            );
+            let mut legacy = ConfigEditor::load(bytes.as_bytes()).unwrap();
+            assert_eq!(legacy_add(&mut legacy, name, uuid).unwrap(), *uuid);
+            editor.apply_room_add(&plan);
+            let room = editor.get_element(&preview.room.path);
+            assert_eq!(room.name, preview.room.element_name);
+            assert!(room.children.is_empty());
+            assert_eq!(
+                room.attributes
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<BTreeMap<_, _>>(),
+                preview.room.attributes
+            );
+            assert_eq!(
+                room.attributes
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["Type", "V", "U", "Title", "WF"]
+            );
+            assert_eq!(format!("{:?}", editor.root), format!("{:?}", legacy.root));
+            assert_eq!(editor.to_bytes().unwrap(), legacy.to_bytes().unwrap());
+            editor.root.children.remove(insertion);
+            assert_eq!(
+                format!("{:?}", editor.root),
+                before,
+                "all other DOM content and order must stay exact"
+            );
+            assert_eq!(editor.to_bytes().unwrap(), before_bytes);
+
+            let public_preview = editor.preview_room_add(name).unwrap();
+            assert_eq!(public_preview.room.path, preview.room.path);
+            assert_eq!(format!("{:?}", editor.root), before);
+            let uuid = editor.add_room(name).unwrap();
+            assert_legacy_uuid(&uuid);
+            let mut legacy = ConfigEditor::load(bytes.as_bytes()).unwrap();
+            legacy_add(&mut legacy, name, &uuid).unwrap();
+            assert_eq!(format!("{:?}", editor.root), format!("{:?}", legacy.root));
+            assert_eq!(editor.to_bytes().unwrap(), legacy.to_bytes().unwrap());
+        }
+    }
+
+    #[test]
+    fn room_add_plan_preserves_substring_unicode_empty_and_legacy_duplicate_admission() {
+        for (xml, name, duplicate) in [
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Kitchen Long"/></ControlList>"#,
+                "kItChEn",
+                true,
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Kitchen"/></ControlList>"#,
+                "Kitchen Long",
+                false,
+            ),
+            (
+                r#"<ControlList><C Type="Page"><C Type="Place" U="a" Title="Nested"/></C></ControlList>"#,
+                "est",
+                true,
+            ),
+            (r#"<C Type="Place" U="a" Title="Root"/>"#, "root", true),
+            (
+                r#"<ControlList><C Type="Place" U="" Title="Alpha"/></ControlList>"#,
+                "alpha",
+                true,
+            ),
+            (
+                r#"<ControlList><C Type="Place" Title="Alpha"/></ControlList>"#,
+                "alpha",
+                false,
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a"/></ControlList>"#,
+                "",
+                false,
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title=""/></ControlList>"#,
+                "",
+                true,
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Anything"/></ControlList>"#,
+                "",
+                true,
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Küche"/></ControlList>"#,
+                "KÜCHE",
+                true,
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Küche"/></ControlList>"#,
+                "Ku\u{308}che",
+                false,
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Straße"/></ControlList>"#,
+                "STRASSE",
+                false,
+            ),
+            (
+                r#"<ControlList><C Type="place" U="a" Title="Alpha"/><Other Type="Place" U="b" Title="Alpha"/></ControlList>"#,
+                "Alpha",
+                false,
+            ),
+            (
+                r#"<ControlList><C Type="PlaceCaption" Title="Alpha"/><C Type="Future" U="a" Title="Alpha"/></ControlList>"#,
+                "Alpha",
+                false,
+            ),
+            (r#"<ControlList/>"#, "", false),
+            (r#"<ControlList/>"#, "  ", false),
+            (r#"<ControlList/>"#, "uuid:raw [room]", false),
+        ] {
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let mut legacy = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let expected = legacy_add(&mut legacy, name, "test-only")
+                .err()
+                .map(|e| e.to_string());
+            let preview = editor.preview_room_add(name);
+            assert_eq!(preview.is_err(), duplicate, "{xml}: {name:?}");
+            assert_eq!(preview.as_ref().err().map(ToString::to_string), expected);
+            assert_eq!(format!("{:?}", editor.root), before);
+            if duplicate {
+                assert_eq!(
+                    editor.add_room(name).unwrap_err().to_string(),
+                    expected.unwrap()
+                );
+                assert_eq!(format!("{:?}", editor.root), before);
+            } else {
+                assert_eq!(preview.unwrap().room.attributes["Title"], name);
+                let uuid = editor.add_room(name).unwrap();
+                let mut legacy = ConfigEditor::load(xml.as_bytes()).unwrap();
+                legacy_add(&mut legacy, name, &uuid).unwrap();
+                assert_eq!(format!("{:?}", editor.root), format!("{:?}", legacy.root));
+            }
+        }
+    }
+
+    #[test]
+    fn room_add_preview_keeps_raw_metadata_and_all_editor_state_without_defaults_or_stamp() {
+        let bytes = b"\xef\xbb\xbf<FutureRoot U=\"\" Future=\"+003\" 1wire=\"raw\">\r\n<C Type=\"Document\" Date=\"old\" DateS=\"+000\"/>\r\n<C Type=\"PlaceCaption\" Title=\"\" WF=\"\"/>\r\n<C Type=\"Place\" U=\"a\" Title=\"Alpha\"/>\r\n</FutureRoot>\r\n";
+        let editor = ConfigEditor::load(bytes).unwrap();
+        let before = format!("{:?}", editor.root);
+        let serialized = editor.to_bytes().unwrap();
+        let renames = editor.digit_attr_renames.clone();
+        let preview = editor.preview_room_add("β").unwrap();
+        assert_eq!(
+            preview.parent.attributes.get("U").map(String::as_str),
+            Some("")
+        );
+        assert!(!preview.parent.attributes.contains_key("Type"));
+        assert_eq!(preview.parent.attributes["Future"], "+003");
+        let anchor = preview.insert_after.unwrap();
+        assert_eq!(anchor.attributes["U"], "a");
+        assert!(!anchor.attributes.contains_key("WF"));
+        let preview = editor.preview_room_add("ALPHA").unwrap_err();
+        assert_eq!(preview.to_string(), "Room 'ALPHA' already exists");
+        assert_eq!(format!("{:?}", editor.root), before);
+        assert_eq!(editor.to_bytes().unwrap(), serialized);
+        assert!(editor.had_bom && editor.had_crlf);
+        assert_eq!(editor.digit_attr_renames, renames);
+    }
+}
+
+#[cfg(test)]
+mod control_move_tests {
+    use super::*;
+
+    const XML: &str = r#"<ControlList Future="retain">
+      <C Type="Place" U="a" Title="Alpha"/><C Type="Place" U="b" Title="Beta"/>
+      <C Type="Place" U="long" Title="Beta Long"/>
+      <C Type="Page" U="page" Title="Page"><IoData Pr="a" Cr="category"/>
+        <C Type="Future" U="first" Title="Lamp" gid="LampGid" Future="+003">
+          <IoData Pr="a" Cr="category" Future="01"/><IoData Pr="b"/>
+          <Unknown><IoData Pr="retain"/></Unknown>
+          <Co K="AQ" U="out" Def="+000"><In Input="ref" FLG="01"/></Co>
+          <C Type="Future" U="nested" Title="Nested"><IoData Pr=""/><IoData Future="002"/></C>
+        </C>
+        <C Type="Future" U="second" Title="Lamp"><IoData Pr="b"/></C>
+        <C Type="Future" U="dry" Title="Dry"><Unknown><IoData Pr="retain"/></Unknown></C>
+        <C Type="Other" U="other" Title="Other"><IoData Pr="a"/></C>
+      </C>
+      <C Type="AutomaticDesigner"><C Type="Future" U="first" Title="Mirror"><IoData Pr="a"/></C></C>
+    </ControlList>"#;
+
+    fn legacy_move(
+        editor: &mut ConfigEditor,
+        type_filter: Option<&str>,
+        title: Option<&str>,
+        target: &str,
+        exclude: &[&str],
+    ) -> Result<String> {
+        let (paths, room_uuid, report) = if let Some(tf) = type_filter {
+            let room_uuid = editor.find_room_uuid(target)?;
+            let mut paths = Vec::new();
+            ConfigEditor::collect_typed_with_iodata(
+                &editor.root,
+                tf,
+                exclude,
+                &mut Vec::new(),
+                &mut paths,
+            );
+            let report = format!(
+                "Moved {} {} items to '{}' ({})",
+                paths.len(),
+                tf,
+                target,
+                room_uuid
+            );
+            (paths, room_uuid, report)
+        } else if let Some(title) = title {
+            let path = editor.require_one(title)?;
+            let room_uuid = editor.find_room_uuid(target)?;
+            let report = format!("Moved '{}' to '{}' ({})", title, target, room_uuid);
+            (vec![path], room_uuid, report)
+        } else {
+            bail!("Specify --type or --title to select controls to move");
+        };
+        for path in paths {
+            for child in &mut editor.get_element_mut(&path).children {
+                if let Some(io) = child.as_mut_element()
+                    && io.name == "IoData"
+                {
+                    io.attributes.insert("Pr".to_owned(), room_uuid.clone());
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    #[test]
+    fn control_move_plan_matches_legacy_branches_and_entire_dom() {
+        for (tf, title, exclude) in [
+            (Some("fUtUrE"), Some("nonexistent"), vec![]),
+            (Some("Future"), None, vec!["FUTURE"]),
+            (Some("Missing"), None, vec![]),
+            (Some(""), None, vec![]),
+            (Some("Type:Future"), None, vec![]),
+            (None, Some("Lamp [Beta]"), vec![]),
+            (None, Some("gid:lampgid"), vec!["Future"]),
+            (None, Some("uuid:first"), vec![]),
+            (None, Some("Mirror"), vec![]),
+            (None, Some("Type:Page"), vec![]),
+            (None, Some("Dry"), vec![]),
+            (None, Some("Nested"), vec![]),
+        ] {
+            let mut editor = ConfigEditor::load(XML.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let preview = editor
+                .preview_control_move(tf, title, "bEtA", &exclude)
+                .unwrap();
+            assert_eq!(format!("{:?}", editor.root), before);
+            assert_eq!(preview.room_uuid, "b");
+            assert_eq!(preview.target_room, "bEtA");
+            let mut planned = ConfigEditor::load(XML.as_bytes()).unwrap();
+            for selected in &preview.selected {
+                assert_eq!(
+                    selected.attributes,
+                    editor
+                        .get_element(&selected.path)
+                        .attributes
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect()
+                );
+                for io in &selected.io_data {
+                    assert_eq!(
+                        io.before_pr,
+                        editor.get_element(&io.path).attributes.get("Pr").cloned()
+                    );
+                    assert_eq!(io.changed, io.before_pr.as_deref() != Some("b"));
+                    assert_eq!(io.created, io.before_pr.is_none());
+                    planned
+                        .get_element_mut(&io.path)
+                        .attributes
+                        .insert("Pr".to_owned(), io.after_pr.clone());
+                }
+            }
+            let mut legacy = ConfigEditor::load(XML.as_bytes()).unwrap();
+            let report = legacy_move(&mut legacy, tf, title, "bEtA", &exclude).unwrap();
+            assert_eq!(preview.report, report);
+            assert_eq!(
+                editor.move_control(tf, title, "bEtA", &exclude).unwrap(),
+                report
+            );
+            assert_eq!(format!("{:?}", editor.root), format!("{:?}", legacy.root));
+            assert_eq!(format!("{:?}", planned.root), format!("{:?}", legacy.root));
+            assert_eq!(editor.to_bytes().unwrap(), legacy.to_bytes().unwrap());
+            if let Some(tf) = tf {
+                let mut helper = ConfigEditor::load(XML.as_bytes()).unwrap();
+                assert_eq!(
+                    helper.move_to_room(tf, "bEtA", &exclude).unwrap(),
+                    (preview.count, "b".to_owned())
+                );
+                assert_eq!(format!("{:?}", helper.root), format!("{:?}", legacy.root));
+            }
+        }
+    }
+
+    #[test]
+    fn control_move_plan_exposes_preorder_duplicates_missing_empty_and_noop() {
+        let editor = ConfigEditor::load(XML.as_bytes()).unwrap();
+        let preview = editor
+            .preview_control_move(Some("Future"), None, "Beta", &[])
+            .unwrap();
+        let identities: Vec<_> = preview
+            .selected
+            .iter()
+            .map(|item| item.attributes["U"].as_str())
+            .collect();
+        assert_eq!(identities, ["first", "nested", "second", "first"]);
+        assert!(
+            preview.selected[1]
+                .path
+                .starts_with(&preview.selected[0].path)
+        );
+        assert_eq!(preview.selected[0].io_data.len(), 2);
+        assert_eq!(preview.selected[0].io_data[0].attributes["Future"], "01");
+        assert_eq!(
+            preview.selected[1].io_data[0].before_pr.as_deref(),
+            Some("")
+        );
+        assert!(!preview.selected[1].io_data[0].created);
+        assert_eq!(preview.selected[1].io_data[1].before_pr, None);
+        assert!(preview.selected[1].io_data[1].created);
+        assert!(!preview.selected[2].io_data[0].changed);
+        for (tf, title, count) in [
+            (Some("Missing"), None, 0),
+            (None, Some("Dry"), 1),
+            (None, Some("Lamp [Beta]"), 1),
+        ] {
+            let preview = editor.preview_control_move(tf, title, "Beta", &[]).unwrap();
+            assert_eq!(preview.count, count);
+            assert!(!preview.changed);
+        }
+        let empty = r#"<ControlList><C Type="Place" U="" Title=""/>
+          <C Type="Future" Title="Raw"><IoData/><IoData Pr=""/></C></ControlList>"#;
+        let mut editor = ConfigEditor::load(empty.as_bytes()).unwrap();
+        let preview = editor
+            .preview_control_move(None, Some("Raw"), "", &[])
+            .unwrap();
+        assert_eq!(preview.room_uuid, "");
+        assert!(preview.selected[0].io_data[0].changed);
+        assert!(!preview.selected[0].io_data[1].changed);
+        assert_eq!(
+            editor.move_control(None, Some("Raw"), "", &[]).unwrap(),
+            "Moved 'Raw' to '' ()"
+        );
+    }
+
+    #[test]
+    fn control_move_plan_preserves_error_order_and_failure_nonmutation() {
+        for (xml, tf, title, target, expected) in [
+            (XML, None, None, "missing", "Specify --type or --title"),
+            (
+                XML,
+                None,
+                Some("Missing"),
+                "missing",
+                "Element 'Missing' not found",
+            ),
+            (
+                XML,
+                None,
+                Some("Lamp"),
+                "missing",
+                "Selector 'Lamp' matches",
+            ),
+            (
+                XML,
+                Some("Missing"),
+                Some("Lamp"),
+                "missing",
+                "Room 'missing' not found",
+            ),
+            (
+                XML,
+                None,
+                Some("Dry"),
+                "missing",
+                "Room 'missing' not found",
+            ),
+            (XML, Some("Future"), None, "", "Multiple rooms match"),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Same"/><C Type="Place" U="b" Title="Same"/></ControlList>"#,
+                Some("Future"),
+                None,
+                "Same",
+                "Multiple rooms match",
+            ),
+        ] {
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let preview_error = editor
+                .preview_control_move(tf, title, target, &[])
+                .unwrap_err()
+                .to_string();
+            let mut legacy = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let legacy_error = legacy_move(&mut legacy, tf, title, target, &[])
+                .unwrap_err()
+                .to_string();
+            assert!(preview_error.contains(expected), "{preview_error}");
+            assert_eq!(preview_error, legacy_error);
+            assert_eq!(
+                editor
+                    .move_control(tf, title, target, &[])
+                    .unwrap_err()
+                    .to_string(),
+                legacy_error
+            );
+            assert_eq!(format!("{:?}", editor.root), before);
+        }
+    }
+
+    #[test]
+    fn control_move_public_transaction_matches_original_mutator_and_canonical_save() {
+        let clock = chrono::DateTime::parse_from_rfc3339("2026-10-12T07:55:33+01:00").unwrap();
+        let stamped_xml = XML.replace(
+            "<ControlList Future=\"retain\">",
+            "<ControlList Future=\"retain\"><C Type=\"Document\" Date=\"future\" DateS=\"999999999\"/>",
+        );
+        for xml in [
+            XML.to_owned(),
+            format!("\u{feff}{}\r\n", stamped_xml.replace('\n', "\r\n")),
+        ] {
+            let baseline = ConfigEditor::load(xml.as_bytes())
+                .unwrap()
+                .to_bytes()
+                .unwrap();
+            for (tf, title, exclude) in [
+                (Some("fUtUrE"), Some("missing"), vec![]),
+                (Some("Future"), None, vec!["FUTURE"]),
+                (Some("Missing"), None, vec![]),
+                (None, Some("gid:lampgid"), vec!["Future"]),
+                (None, Some("uuid:first"), vec![]),
+                (None, Some("Dry"), vec![]),
+                (None, Some("Nested"), vec![]),
+                (None, Some("Lamp [Beta]"), vec![]),
+            ] {
+                let mut old = ConfigEditor::load(xml.as_bytes()).unwrap();
+                let report = legacy_move(&mut old, tf, title, "bEtA", &exclude).unwrap();
+                let changed = baseline != old.to_bytes().unwrap();
+                let stamped = changed && old.stamp_document(&clock);
+                let actual = lox_core::configuration::editor::move_control(
+                    xml.as_bytes(),
+                    tf,
+                    title,
+                    "bEtA",
+                    &exclude,
+                    &clock,
+                )
+                .unwrap();
+                assert_eq!(actual.bytes, old.to_bytes().unwrap());
+                assert_eq!(actual.content_changed, changed);
+                assert_eq!(actual.document_stamped, stamped);
+                let preview = ConfigEditor::load(xml.as_bytes())
+                    .unwrap()
+                    .preview_control_move(tf, title, "bEtA", &exclude)
+                    .unwrap();
+                assert_eq!(preview.report, report);
+                assert_eq!(actual.change.selected_count, preview.count);
+                assert_eq!(actual.change.association_changed, preview.changed);
+            }
+        }
+    }
+
+    #[test]
+    fn control_move_public_errors_keep_original_debug_chain_and_concrete_causes() {
+        let clock = chrono::DateTime::parse_from_rfc3339("2026-10-12T07:55:33+01:00").unwrap();
+        for (bytes, tf, title, room) in [
+            (b"<C>".as_slice(), None, None, ""),
+            (b"<C A='1' A='2'/>".as_slice(), None, None, ""),
+            (b"<C Title='\xff'/>".as_slice(), None, None, ""),
+            (XML.as_bytes(), None, Some("Missing"), "missing"),
+            (XML.as_bytes(), None, Some("Lamp"), "missing"),
+            (XML.as_bytes(), Some("Future"), Some("Lamp"), "missing"),
+            (XML.as_bytes(), Some("Future"), None, ""),
+            (XML.as_bytes(), None, None, ""),
+        ] {
+            let old = ConfigEditor::load(bytes)
+                .and_then(|mut editor| legacy_move(&mut editor, tf, title, room, &[]))
+                .unwrap_err();
+            let new = super::super::editor_error(
+                lox_core::configuration::editor::move_control(bytes, tf, title, room, &[], &clock)
+                    .unwrap_err(),
+            );
+            assert_eq!(format!("{old:?}"), format!("{new:?}"));
+            assert_eq!(format!("{old:#}"), format!("{new:#}"));
+            assert_eq!(
+                old.chain().map(ToString::to_string).collect::<Vec<_>>(),
+                new.chain().map(ToString::to_string).collect::<Vec<_>>()
+            );
+            assert_eq!(old.root_cause().to_string(), new.root_cause().to_string());
+            assert_eq!(
+                old.downcast_ref::<String>().is_some(),
+                new.downcast_ref::<String>().is_some()
+            );
+            assert_eq!(
+                old.downcast_ref::<&'static str>().is_some(),
+                new.downcast_ref::<&'static str>().is_some()
+            );
+            let native = |error: &anyhow::Error| {
+                error
+                    .downcast_ref::<Box<dyn std::error::Error + Send + Sync>>()
+                    .is_some_and(|cause| cause.as_ref().is::<xmltree::ParseError>())
+            };
+            assert_eq!(native(&old), native(&new));
+            assert_eq!(
+                old.downcast_ref::<xmltree::ParseError>().is_some(),
+                new.downcast_ref::<xmltree::ParseError>().is_some()
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod room_rename_tests {
+    use super::*;
+
+    fn legacy_rename(editor: &mut ConfigEditor, selector: &str, name: &str) -> Result<String> {
+        let _path = editor.require_one(selector)?;
+        editor.set_attribute(
+            &format!("uuid:{}", {
+                let elements = editor.find_elements(selector);
+                if elements.is_empty() {
+                    bail!("Room '{}' not found", selector);
+                }
+                editor
+                    .get_element(&elements[0])
+                    .attributes
+                    .get("U")
+                    .cloned()
+                    .unwrap_or_default()
+            }),
+            "Title",
+            name,
+        )
+    }
+
+    #[test]
+    fn room_rename_plan_preserves_legacy_admission_raw_titles_and_entire_dom() {
+        let xml = r#"<ControlList Future="retain">
+          <C Type="Document" U="doc" Date="2020-01-01 00:00:00" DateS="347068800"/>
+          <C Type="Place" U="room" Title="  Küche,&quot;室&quot;  " gid="RoomGid" Future="opaque">
+            <IoData Pr="other" Cr="cat" Future="01"/><SET><Unknown v="+003"/></SET>
+          </C>
+          <C Type="Place" U="other" Title="Duplicate"/>
+          <C Type="Page" U="page"><C Type="FutureBlock" U="block" Title="NonRoom">
+            <IoData Pr="room" Cr="cat" Future="002"/><IoData Pr="other"/>
+            <Co K="AQ" U="out" Def="+000"><In Input="ref" FLG="01"/></Co>
+            <Unknown Ref="room" Title="retain"/>
+          </C></C>
+          <C Type="AutomaticDesigner"><C Type="Place" U="room" Title="mirror"><IoData Pr="room"/></C></C>
+          <Unknown Pr="room" U="future" Title="retain"/>
+        </ControlList>"#;
+        let data = format!("\u{feff}{}\r\n", xml.replace('\n', "\r\n"));
+        for selector in [
+            "KÜCHE",
+            "uuid:room",
+            "gid:roomgid",
+            "NonRoom",
+            "Type:FutureBlock",
+        ] {
+            for name in [
+                "",
+                "  ",
+                "Duplicate",
+                "Grüße 室 🏠",
+                "  Küche,\"室\"  ",
+                "x,\n\"y\"",
+            ] {
+                let mut editor = ConfigEditor::load(data.as_bytes()).unwrap();
+                let before = format!("{:?}", editor.root);
+                let preview = editor.preview_room_rename(selector, name).unwrap();
+                assert_eq!(format!("{:?}", editor.root), before);
+                assert_eq!(preview.after_title, name);
+                assert_eq!(
+                    preview.before_title.as_deref(),
+                    preview.target.attributes.get("Title").map(String::as_str)
+                );
+                assert_eq!(
+                    preview.changed,
+                    preview.before_title.as_deref() != Some(name)
+                );
+                let mut legacy = ConfigEditor::load(data.as_bytes()).unwrap();
+                let expected_report = legacy_rename(&mut legacy, selector, name).unwrap();
+                assert_eq!(preview.report, expected_report);
+                assert_eq!(editor.rename_room(selector, name).unwrap(), expected_report);
+                assert_eq!(format!("{:?}", editor.root), format!("{:?}", legacy.root));
+                assert_eq!(editor.to_bytes().unwrap(), legacy.to_bytes().unwrap());
+                let output = editor.to_bytes().unwrap();
+                assert!(output.starts_with(&[0xef, 0xbb, 0xbf]));
+                assert!(output.windows(2).any(|bytes| bytes == b"\r\n"));
+            }
+        }
+    }
+
+    #[test]
+    fn room_rename_plan_keeps_uuid_relookup_and_missing_title() {
+        for (xml, selector, selected, target, before) in [
+            (
+                r#"<ControlList><C Type="Future" U="same" Title="First"/><C Type="Place" U="same" Title="Second"/></ControlList>"#,
+                "Second",
+                "same",
+                "same",
+                Some("First"),
+            ),
+            (
+                r#"<ControlList><C Type="Future" U="x"/></ControlList>"#,
+                "uuid:x",
+                "x",
+                "x",
+                None,
+            ),
+            (
+                r#"<ControlList><C Type="place" U="x" Title="" title="opaque" Future="001"/></ControlList>"#,
+                "uuid:x",
+                "x",
+                "x",
+                Some(""),
+            ),
+            (
+                r#"<ControlList><C U="x" Title="Only"/></ControlList>"#,
+                "",
+                "x",
+                "x",
+                Some("Only"),
+            ),
+            (
+                r#"<ControlList><C Type="Future" U="" Title="Empty"/></ControlList>"#,
+                "Empty",
+                "",
+                "",
+                Some("Empty"),
+            ),
+            (
+                r#"<ControlList><C Type="Future" Title="NoUuid"/><C U="" Title="Fallback"/></ControlList>"#,
+                "NoUuid",
+                "",
+                "",
+                Some("Fallback"),
+            ),
+        ] {
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let preview = editor.preview_room_rename(selector, "").unwrap();
+            assert_eq!(
+                preview
+                    .selected
+                    .attributes
+                    .get("U")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+                selected
+            );
+            assert_eq!(preview.target.attributes["U"], target);
+            assert_eq!(preview.before_title.as_deref(), before);
+            assert_eq!(preview.changed, before != Some(""));
+            let mut legacy = ConfigEditor::load(xml.as_bytes()).unwrap();
+            assert_eq!(
+                editor.rename_room(selector, "").unwrap(),
+                legacy_rename(&mut legacy, selector, "").unwrap()
+            );
+            assert_eq!(editor.to_bytes().unwrap(), legacy.to_bytes().unwrap());
+        }
+    }
+
+    #[test]
+    fn room_rename_qualified_selection_is_uuid_source_in_either_dom_order() {
+        let alpha = r#"<C Type="Future" U="alpha" Title="Lamp" Future="+003"><IoData Pr="a" Cr="cat" Future="01"/><Co U="alpha-out"/><Unknown Ref="beta" Value="keep"/></C>"#;
+        let beta = r#"<C Type="Future" U="beta" Title="Lamp" Future="+004"><IoData Pr="b" Cr="cat" Future="02"/><Co U="beta-out"/><Unknown Ref="alpha" Value="retain"/></C>"#;
+        for objects in [format!("{alpha}{beta}"), format!("{beta}{alpha}")] {
+            let xml = format!(
+                r#"<ControlList Future="opaque"><C Type="Place" U="a" Title="Alpha"/><C Type="Place" U="b" Title="Beta"/>{objects}</ControlList>"#
+            );
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let preview = editor
+                .preview_room_rename("Lamp [Beta]", "Grüße 室")
+                .unwrap();
+            assert_eq!(format!("{:?}", editor.root), before);
+            assert_eq!(preview.selected.attributes["U"], "beta");
+            assert_eq!(preview.uuid_source.path, preview.selected.path);
+            assert_eq!(preview.uuid_source.attributes, preview.selected.attributes);
+            assert_eq!(preview.target.path, preview.selected.path);
+            assert_eq!(preview.before_title.as_deref(), Some("Lamp"));
+            let mut expected = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let path = expected.require_one("uuid:beta").unwrap();
+            expected
+                .get_element_mut(&path)
+                .attributes
+                .insert("Title".to_owned(), "Grüße 室".to_owned());
+            assert_eq!(
+                editor.rename_room("Lamp [Beta]", "Grüße 室").unwrap(),
+                preview.report
+            );
+            assert_eq!(format!("{:?}", editor.root), format!("{:?}", expected.root));
+        }
+    }
+
+    #[test]
+    fn room_rename_qualified_selection_still_relooks_up_canonical_uuid_mirror() {
+        let xml = r#"<ControlList><C Type="Place" U="a" Title="Alpha"/><C Type="Place" U="b" Title="Beta"/><C Type="Future" U="beta" Title="Canonical"><IoData Pr="a" Future="keep"/></C><C Type="Future" U="alpha" Title="Lamp"><IoData Pr="a"/></C><C Type="Future" U="beta" Title="Lamp"><IoData Pr="b"/><Unknown U="metadata" Ref="beta"/></C></ControlList>"#;
+        let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+        let before = format!("{:?}", editor.root);
+        let preview = editor.preview_room_rename("Lamp [Beta]", "New").unwrap();
+        assert_eq!(format!("{:?}", editor.root), before);
+        assert_eq!(preview.selected.path, vec![4]);
+        assert_eq!(preview.uuid_source.path, preview.selected.path);
+        assert_eq!(preview.uuid_source.attributes, preview.selected.attributes);
+        assert_eq!(preview.target.path, vec![2]);
+        assert_eq!(preview.target.attributes["U"], "beta");
+        assert_eq!(preview.before_title.as_deref(), Some("Canonical"));
+        let mut expected = ConfigEditor::load(xml.as_bytes()).unwrap();
+        let report = expected.set_attribute("uuid:beta", "Title", "New").unwrap();
+        assert_eq!(preview.report, report);
+        assert_eq!(editor.rename_room("Lamp [Beta]", "New").unwrap(), report);
+        assert_eq!(format!("{:?}", editor.root), format!("{:?}", expected.root));
+    }
+
+    #[test]
+    fn room_rename_qualified_missing_uuid_uses_existing_empty_uuid_resolution() {
+        for (uuid_attr, fallback, error) in [
+            ("", "", Some("'uuid:' not found")),
+            (r#" U="""#, "", None),
+            ("", r#"<C U="" Title="Fallback"/>"#, None),
+            (
+                "",
+                r#"<C U="" Title="Fallback"/><C U="" Title="Another"/>"#,
+                Some("Selector 'uuid:' matches 2 elements"),
+            ),
+        ] {
+            let xml = format!(
+                r#"<ControlList><C Type="Place" U="a" Title="Alpha"/><C Type="Place" U="b" Title="Beta"/><C Type="Future" U="alpha" Title="Lamp"><IoData Pr="a"/></C><C Type="Future"{uuid_attr} Title="Lamp"><IoData Pr="b"/><Unknown Value="retain"/></C>{fallback}</ControlList>"#
+            );
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            if let Some(error) = error {
+                let preview_error = editor
+                    .preview_room_rename("Lamp [Beta]", "New")
+                    .unwrap_err()
+                    .to_string();
+                assert!(preview_error.contains(error), "{preview_error}");
+                assert_eq!(
+                    editor
+                        .rename_room("Lamp [Beta]", "New")
+                        .unwrap_err()
+                        .to_string(),
+                    preview_error
+                );
+                assert_eq!(format!("{:?}", editor.root), before);
+            } else {
+                let preview = editor.preview_room_rename("Lamp [Beta]", "New").unwrap();
+                assert_eq!(format!("{:?}", editor.root), before);
+                assert_eq!(preview.uuid_source.path, preview.selected.path);
+                assert_eq!(preview.uuid_source.attributes, preview.selected.attributes);
+                assert_eq!(
+                    preview.target.path,
+                    if uuid_attr.is_empty() {
+                        vec![4]
+                    } else {
+                        vec![3]
+                    }
+                );
+                let mut expected = ConfigEditor::load(xml.as_bytes()).unwrap();
+                let report = expected.set_attribute("uuid:", "Title", "New").unwrap();
+                assert_eq!(preview.report, report);
+                assert_eq!(editor.rename_room("Lamp [Beta]", "New").unwrap(), report);
+                assert_eq!(format!("{:?}", editor.root), format!("{:?}", expected.root));
+            }
+        }
+    }
+
+    #[test]
+    fn room_rename_plan_keeps_ordered_errors_without_mutation() {
+        for (xml, selector, error) in [
+            (
+                r#"<ControlList><C U="a" Title="Kitchen"/><C U="b" Title="Kitchen"/></ControlList>"#,
+                "Kitchen",
+                "Selector 'Kitchen' matches 2 elements",
+            ),
+            (
+                r#"<ControlList><C Title="NoUuid"/></ControlList>"#,
+                "NoUuid",
+                "'uuid:' not found",
+            ),
+            (
+                r#"<ControlList><C Title="NoUuid"/><C U=""/><C U=""/></ControlList>"#,
+                "NoUuid",
+                "Selector 'uuid:' matches 2 elements",
+            ),
+            (
+                r#"<ControlList><C U="a" Title="Kitchen"/><C U="b" Title="Kitchen extension"/></ControlList>"#,
+                "Kitchen",
+                "Selector 'Kitchen' matches 2 elements",
+            ),
+            (
+                r#"<ControlList><C Type="Place" U="a" Title="Kitchen"/></ControlList>"#,
+                "missing",
+                "'missing' not found",
+            ),
+        ] {
+            let mut editor = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let before = format!("{:?}", editor.root);
+            let preview_error = editor
+                .preview_room_rename(selector, "")
+                .unwrap_err()
+                .to_string();
+            assert!(preview_error.contains(error), "{preview_error}");
+            let mut legacy = ConfigEditor::load(xml.as_bytes()).unwrap();
+            let legacy_error = legacy_rename(&mut legacy, selector, "")
+                .unwrap_err()
+                .to_string();
+            assert_eq!(preview_error, legacy_error);
+            assert_eq!(
+                editor.rename_room(selector, "").unwrap_err().to_string(),
+                legacy_error
+            );
+            assert_eq!(format!("{:?}", editor.root), before);
+        }
     }
 }

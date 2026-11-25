@@ -1,0 +1,433 @@
+use std::fs;
+
+use predicates::prelude::*;
+use serde_json::Value;
+
+fn id(n: u8) -> String {
+    format!("abcdef01-0002-0003-{n:016x}")
+}
+
+fn fixture() -> String {
+    format!(
+        "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<ControlList><C Type=\"Document\" U=\"{}\" Date=\"2020-01-01 00:00:00\" DateS=\"1\"><C Type=\"CentralLight\" U=\"{}\" Title=\"Central\" WF=\"16384\" linkC=\"{},{}\" Future=\"keep\"><IoData Visu=\"true\" Pr=\"{}\" Rating=\"7\"/><Unknown key=\"first\"/><Co K=\"I\" U=\"{}\"><In Input=\"{}\"/></Co><Unknown key=\"last\"/></C><C Type=\"ModbusServer\" U=\"{}\" Title=\"A\" WF=\"268451840\"/><C Type=\"ModbusServer\" U=\"{}\" Title=\"B\" WF=\"268435456\"/><C Type=\"Place\" U=\"{}\" Title=\"Office\"/><C Type=\"HVACController\" U=\"{}\" iObjS=\"unrelated\"/></C></ControlList>\r\n",
+        id(1),
+        id(2),
+        id(10),
+        id(11),
+        id(30),
+        id(20),
+        id(21),
+        id(10),
+        id(11),
+        id(30),
+        id(40)
+    )
+}
+
+#[test]
+fn central_light_links_cli_moves_uuid_with_room_and_preserves_save_contract() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let output = dir.path().join("output.Loxone");
+    let stored = id(11).to_uppercase();
+    let original = fixture().replacen(&format!(",{}\"", id(11)), &format!(",{stored}\""), 1);
+    fs::write(&input, &original).unwrap();
+    let result = assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["config", "central-light", "move-link"])
+        .arg(&input)
+        .args(["Central", &id(11), "up", "--room", "Office", "--save-as"])
+        .arg(&output)
+        .args(["-o", "json", "-q"])
+        .assert()
+        .success()
+        .stderr("")
+        .get_output()
+        .stdout
+        .clone();
+    let result: Value = serde_json::from_slice(&result).unwrap();
+    assert_eq!(result["changed"], true);
+    assert_eq!(result["movement"]["uuid"], stored);
+    assert_eq!(result["movement"]["from_position"], 2);
+    assert_eq!(result["movement"]["to_position"], 1);
+    assert_eq!(result["central_light"]["links"][0]["uuid"], stored);
+    assert_eq!(fs::read(&input).unwrap(), original.as_bytes());
+    let saved = fs::read(&output).unwrap();
+    assert!(saved.starts_with(&[0xef, 0xbb, 0xbf]));
+    assert!(saved.windows(2).any(|bytes| bytes == b"\r\n"));
+    let saved = String::from_utf8(saved).unwrap();
+    for retained in [
+        format!("linkC=\"{stored},{}\"", id(10)),
+        format!("Input=\"{}\"", id(21)),
+        "Future=\"keep\"".into(),
+        "Rating=\"7\"".into(),
+        "WF=\"268451840\"".into(),
+        "WF=\"268435456\"".into(),
+        "iObjS=\"unrelated\"".into(),
+    ] {
+        assert!(saved.contains(&retained), "lost {retained}");
+    }
+    assert!(saved.find("key=\"first\"").unwrap() < saved.find("key=\"last\"").unwrap());
+    assert!(!saved.contains("DateS=\"1\""));
+    assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["config", "central-light", "inspect"])
+        .arg(&output)
+        .args(["Central [Office]", "--no-header", "-q"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&stored).and(predicate::str::contains("POSITION").not()));
+}
+
+#[test]
+fn central_light_links_cli_boundaries_keep_original_bytes_and_support_csv() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let output = dir.path().join("output.Loxone");
+    let original = fixture();
+    fs::write(&input, &original).unwrap();
+    for (uuid, direction) in [(id(10), "up"), (id(11), "down")] {
+        let result = assert_cmd::cargo::cargo_bin_cmd!("lox")
+            .env("LOX_TELEMETRY", "0")
+            .args(["config", "central-light", "move-link"])
+            .arg(&input)
+            .args(["Central", &uuid, direction, "-o", "json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let result: Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(result["changed"], false);
+        assert!(result["saved_to"].is_null());
+        assert_eq!(fs::read(&input).unwrap(), original.as_bytes());
+        assert_cmd::cargo::cargo_bin_cmd!("lox")
+            .env("LOX_TELEMETRY", "0")
+            .args(["config", "central-light", "move-link"])
+            .arg(&input)
+            .args(["Central", &uuid, direction, "--save-as"])
+            .arg(&output)
+            .args(["-o", "csv", "--no-header", "-q"])
+            .assert()
+            .success()
+            .stderr("")
+            .stdout(
+                predicate::str::contains(format!("1,\"{}\",\"ModbusServer\",\"A\"", id(10)))
+                    .and(predicate::str::contains("POSITION").not()),
+            );
+        assert_eq!(fs::read(&output).unwrap(), original.as_bytes());
+    }
+}
+
+#[test]
+fn central_light_links_cli_refusals_preserve_input_and_existing_destination() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let output = dir.path().join("output.Loxone");
+    for (source, selection, message) in [
+        (fixture(), "1".into(), "nonzero native UUID"),
+        (
+            fixture(),
+            id(99),
+            "positions and names are not identities. Nothing was changed.",
+        ),
+        (
+            fixture().replace("DateS=\"1\">", "DateS=\"1\"><Template IfT=\"true\"/>"),
+            id(11),
+            "Document Template",
+        ),
+        (fixture().replace("268451840", "16384"), id(11), "WF marker"),
+        (
+            fixture().replace(
+                &format!("linkC=\"{},{}\"", id(10), id(11)),
+                &format!("linkC=\"{},{}\"", id(10), id(99)),
+            ),
+            id(11),
+            "exactly one",
+        ),
+    ] {
+        fs::write(&input, &source).unwrap();
+        fs::write(&output, "existing output").unwrap();
+        assert_cmd::cargo::cargo_bin_cmd!("lox")
+            .env("LOX_TELEMETRY", "0")
+            .args(["config", "central-light", "move-link"])
+            .arg(&input)
+            .args(["Central", &selection, "up", "--save-as"])
+            .arg(&output)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+        assert_eq!(fs::read(&input).unwrap(), source.as_bytes());
+        assert_eq!(fs::read_to_string(&output).unwrap(), "existing output");
+    }
+}
+
+#[test]
+fn central_light_links_cli_move_retains_unsupported_dry_run_before_execution() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let output = dir.path().join("output.Loxone");
+    let original = fixture();
+    fs::write(&input, &original).unwrap();
+    assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["--dry-run", "config", "central-light", "move-link"])
+        .arg(&input)
+        .args(["Central", &id(11), "up", "--save-as"])
+        .arg(&output)
+        .args(["-o", "json"])
+        .assert()
+        .failure()
+        .stderr("")
+        .stdout(predicate::str::contains("dry_run_not_supported"));
+    assert_eq!(fs::read(&input).unwrap(), original.as_bytes());
+    assert!(!output.exists());
+}
+
+#[test]
+fn central_light_links_cli_mixed_visibility_refuses_selection_and_raw_boundaries_atomically() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let mixed = fixture()
+        .replace(
+            &format!("linkC=\"{},{}\"", id(10), id(11)),
+            &format!("linkC=\"{},{},{}\"", id(50), id(10), id(11)),
+        )
+        .replace(
+            "</C></ControlList>",
+            &format!(
+                "<C Type=\"Not\" U=\"{}\" Title=\"Hidden\" WF=\"268435456\"/></C></ControlList>",
+                id(50)
+            ),
+        );
+    fs::write(&input, &mixed).unwrap();
+    let inspected = assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["config", "central-light", "inspect"])
+        .arg(&input)
+        .args(["Central", "-o", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let inspected: Value = serde_json::from_slice(&inspected).unwrap();
+    assert_eq!(inspected["central_light"]["links"][0]["uuid"], id(50));
+    for (index, (uuid, direction)) in [
+        (id(50), "down"),
+        (id(10), "up"),
+        (id(11), "down"),
+        (id(50), "up"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for existing in [false, true] {
+            let output = dir.path().join(format!("output-{index}-{existing}.Loxone"));
+            if existing {
+                fs::write(&output, "existing output").unwrap();
+            }
+            assert_cmd::cargo::cargo_bin_cmd!("lox")
+                .env("LOX_TELEMETRY", "0")
+                .args(["config", "central-light", "move-link"])
+                .arg(&input)
+                .args(["Central", &uuid, direction, "--save-as"])
+                .arg(&output)
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("native Up/Down"));
+            assert_eq!(fs::read(&input).unwrap(), mixed.as_bytes());
+            if existing {
+                assert_eq!(fs::read_to_string(&output).unwrap(), "existing output");
+            } else {
+                assert!(!output.exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn central_light_inspection_keeps_selection_and_graph_diagnostics() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let original = fixture().replace("268451840", "16384");
+    let ambiguous = original.replace(r#"Title="A""#, r#"Title="Central shadow""#);
+
+    for (xml, selector, diagnostic) in [
+        (&ambiguous, "Central", "Selector 'Central' matches 2 elements (expected 1):".into()),
+        (&original, "Office", "'Office' is not a plain CentralLight. Use `lox config controls FILE --type CentralLight`; nothing was changed.".into()),
+        (&original, "Central", format!("Inconsistent document linked-function WF marker on '{}'. Repair the linkC reference graph in Loxone Config first; nothing was changed.", id(10))),
+    ] {
+        fs::write(&input, xml).unwrap();
+        assert_cmd::cargo::cargo_bin_cmd!("lox")
+            .env("LOX_TELEMETRY", "0")
+            .args(["config", "central-light", "inspect"])
+            .arg(&input)
+            .arg(selector)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(diagnostic));
+        assert_eq!(fs::read(&input).unwrap(), xml.as_bytes());
+    }
+}
+
+#[test]
+fn central_light_links_cli_removal_saves_marker_deltas_and_last_link_without_defaults() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let output = dir.path().join("output.Loxone");
+    let stored = id(11).to_uppercase();
+    let original = fixture()
+        .replacen(&format!(",{}\"", id(11)), &format!(",{stored}\""), 1)
+        .replace("<C ", "<C V=\"178\" ");
+    fs::write(&input, &original).unwrap();
+    let result = assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["config", "central-light", "remove-link"])
+        .arg(&input)
+        .args(["Central", &id(11), "--room", "Office", "--save-as"])
+        .arg(&output)
+        .args(["-o", "json", "-q"])
+        .assert()
+        .success()
+        .stderr("")
+        .get_output()
+        .stdout
+        .clone();
+    let result: Value = serde_json::from_slice(&result).unwrap();
+    assert_eq!(result["changed"], true);
+    assert_eq!(result["saved_to"], output.to_str().unwrap());
+    assert!(result["movement"].is_null());
+    assert_eq!(result["removal"]["uuid"], stored);
+    assert_eq!(result["removal"]["from_position"], 2);
+    assert_eq!(result["removal"]["remaining_links"], 1);
+    assert_eq!(result["removal"]["reference_marker_cleared"], true);
+    assert_eq!(result["central_light"]["links"][0]["uuid"], id(10));
+    assert_eq!(fs::read(&input).unwrap(), original.as_bytes());
+    let saved = fs::read(&output).unwrap();
+    assert!(saved.starts_with(&[0xef, 0xbb, 0xbf]));
+    assert!(saved.windows(2).any(|bytes| bytes == b"\r\n"));
+    let saved = String::from_utf8(saved).unwrap();
+    for retained in [
+        format!("linkC=\"{}\"", id(10)),
+        format!("Input=\"{}\"", id(21)),
+        "Future=\"keep\"".into(),
+        "Rating=\"7\"".into(),
+        "WF=\"268451840\"".into(),
+        "iObjS=\"unrelated\"".into(),
+    ] {
+        assert!(saved.contains(&retained), "lost {retained}");
+    }
+    assert!(!saved.contains("WF=\"268435456\""));
+    assert!(!saved.contains("DateS=\"1\""));
+    assert!(saved.find("key=\"first\"").unwrap() < saved.find("key=\"last\"").unwrap());
+    assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["config", "central-light", "remove-link"])
+        .arg(&output)
+        .args([
+            "Central [Office]",
+            &id(10),
+            "-o",
+            "csv",
+            "--no-header",
+            "-q",
+        ])
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+    let saved = fs::read_to_string(&output).unwrap();
+    assert!(!saved.contains("linkC="));
+    assert!(saved.contains("WF=\"16384\""));
+    assert!(!saved.contains("WF=\"0\""));
+    let before = fs::read(&output).unwrap();
+    assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["config", "central-light", "remove-link"])
+        .arg(&output)
+        .args(["Central", &id(10)])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not an existing"));
+    assert_eq!(fs::read(&output).unwrap(), before);
+}
+
+#[test]
+fn central_light_links_cli_removal_refusals_do_not_write_source_or_destination() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let output = dir.path().join("output.Loxone");
+    let xml = fixture().replace("<C ", "<C V=\"178\" ");
+    for (source, selection, message) in [
+        (fixture(), id(10), "V >= 90"),
+        (xml.replace("V=\"178\"", "V=\"89\""), id(10), "V >= 90"),
+        (xml.replace("268451840", "2415935488"), id(10), "signed32"),
+        (xml.replace("268451840", "16384"), id(10), "WF marker"),
+        (
+            xml.replace("Type=\"ModbusServer\"", "Type=\"Not\""),
+            id(10),
+            "native removal",
+        ),
+        (xml.clone(), "1".into(), "nonzero native UUID"),
+        (xml.clone(), id(99), "not an existing"),
+        (
+            xml.replace("DateS=\"1\">", "DateS=\"1\"><Template IfT=\"true\"/>"),
+            id(10),
+            "Document Template",
+        ),
+    ] {
+        for existing in [false, true] {
+            fs::write(&input, &source).unwrap();
+            if existing {
+                fs::write(&output, "existing output").unwrap();
+            } else if output.exists() {
+                fs::remove_file(&output).unwrap();
+            }
+            assert_cmd::cargo::cargo_bin_cmd!("lox")
+                .env("LOX_TELEMETRY", "0")
+                .args(["config", "central-light", "remove-link"])
+                .arg(&input)
+                .args(["Central", &selection, "--save-as"])
+                .arg(&output)
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(message));
+            assert_eq!(fs::read(&input).unwrap(), source.as_bytes());
+            if existing {
+                assert_eq!(fs::read_to_string(&output).unwrap(), "existing output");
+            } else {
+                assert!(!output.exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn central_light_links_cli_removal_rejects_marker_shadow_before_save() {
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let input = dir.path().join("input.Loxone");
+    let output = dir.path().join("output.Loxone");
+    let original = fixture().replace("<C ", "<C V=\"178\" ").replacen(
+        "<ControlList>",
+        &format!(r#"<ControlList><C U="{}" WF="77"/>"#, id(11)),
+        1,
+    );
+    fs::write(&input, &original).unwrap();
+    fs::write(&output, "existing output").unwrap();
+    assert_cmd::cargo::cargo_bin_cmd!("lox")
+        .env("LOX_TELEMETRY", "0")
+        .args(["config", "central-light", "remove-link"])
+        .arg(&input)
+        .args(["Central", &id(11), "--save-as"])
+        .arg(&output)
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(format!(
+            "Inconsistent document linked-function WF marker on '{}'. Repair the linkC reference graph in Loxone Config first; nothing was changed.",
+            id(11)
+        )));
+    assert_eq!(fs::read(&input).unwrap(), original.as_bytes());
+    assert_eq!(fs::read_to_string(&output).unwrap(), "existing output");
+}

@@ -10,17 +10,18 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use futures_util::{SinkExt, StreamExt};
-use hmac::{Hmac, Mac};
+use lox_core::authentication::{self, CredentialProfile, HashKey};
+use lox_core::legacy_token_aes;
+#[cfg(test)]
+use lox_core::legacy_token_aes::encrypt as aes_encrypt;
 use rand::RngCore;
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
@@ -53,20 +54,9 @@ const VALIDITY_MARGIN: Duration = Duration::from_secs(86_400);
 // AES helpers (CBC / PKCS7)
 // ---------------------------------------------------------------------------
 
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-
-/// Encrypt `plaintext` with AES-256-CBC + PKCS7 padding.
-fn aes_encrypt(key: &[u8; 32], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
-    let encryptor = Aes256CbcEnc::new(key.into(), iv.into());
-    encryptor.encrypt_padded_vec_mut::<Pkcs7>(plaintext)
-}
-
 /// Decrypt `ciphertext` produced by AES-256-CBC + PKCS7 padding.
 fn aes_decrypt(key: &[u8; 32], iv: &[u8; 16], ciphertext: &[u8]) -> Result<Vec<u8>> {
-    let decryptor = Aes256CbcDec::new(key.into(), iv.into());
-    decryptor
-        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+    legacy_token_aes::decrypt(key, iv, ciphertext)
         .map_err(|e| anyhow::anyhow!("AES decryption failed: {e}"))
 }
 
@@ -132,20 +122,22 @@ impl TokenStore {
 /// Compute HMAC-SHA256(`message`, `key`) and return the result as a
 /// lowercase hex string.  `key` is expected to be hex-encoded.
 pub fn hash_token(token: &str, key: &str) -> String {
+    // Legacy CLI compatibility only: malformed hex has always used an empty key.
     let key_bytes = hex::decode(key).unwrap_or_default();
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key_bytes).expect("HMAC accepts any key length");
-    mac.update(token.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    authentication::hash_app_token(token, &HashKey::from_bytes(&key_bytes)).to_hex()
 }
 
 /// Compute `HMAC-SHA256(user:password, key)` where `key` is hex-encoded.
 fn hash_credentials(user: &str, password: &str, key_hex: &str) -> Result<String> {
     let key_bytes =
         hex::decode(key_hex).context("Miniserver returned invalid hex key for hashing")?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key_bytes).context("invalid HMAC key length")?;
-    let payload = format!("{user}:{password}");
-    mac.update(payload.as_bytes());
-    Ok(hex::encode(mac.finalize().into_bytes()))
+    Ok(authentication::hash_credentials(
+        CredentialProfile::AppRawPassword,
+        user,
+        password,
+        &HashKey::from_bytes(&key_bytes),
+    )
+    .to_hex())
 }
 
 // ---------------------------------------------------------------------------
@@ -181,25 +173,13 @@ fn ws_url(cfg: &Config) -> String {
 ///
 /// Returns `(code, value)`.
 fn parse_ll_response(text: &str) -> Result<(u32, String)> {
-    let v: serde_json::Value = serde_json::from_str(text).context("response is not valid JSON")?;
-    let ll = v.get("LL").context("response missing 'LL' envelope")?;
-    let code = ll
-        .get("code")
-        .and_then(|c| {
-            c.as_str()
-                .or_else(|| c.as_u64().map(|_| ""))
-                .and_then(|s| s.parse().ok())
-                .or_else(|| c.as_u64().map(|n| n as u32))
-        })
-        .unwrap_or(0);
-    let value = ll
-        .get("value")
-        .map(|v| match v {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        })
-        .unwrap_or_default();
-    Ok((code, value))
+    match lox_core::legacy_token_reply::parse(text) {
+        Ok(reply) => Ok((reply.code, reply.value)),
+        Err(error) => match error.into_json_error() {
+            Some(source) => Err(source).context("response is not valid JSON"),
+            None => anyhow::bail!("response missing 'LL' envelope"),
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -392,9 +372,7 @@ async fn recv_encrypted_value(
 
 /// AES-encrypt a command string and return `jdev/sys/enc/{base64_ciphertext}`.
 fn encrypt_command(aes_key: &[u8; 32], aes_iv: &[u8; 16], cmd: &str) -> String {
-    let ciphertext = aes_encrypt(aes_key, aes_iv, cmd.as_bytes());
-    let b64 = B64.encode(&ciphertext);
-    format!("jdev/sys/enc/{b64}")
+    legacy_token_aes::encrypt_command(aes_key, aes_iv, cmd)
 }
 
 /// Extract the HMAC key from the getkey2 response.
@@ -479,6 +457,35 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // -- hash_token -------------------------------------------------------
+
+    #[test]
+    fn auth_hash_app_profile_and_legacy_empty_key() {
+        assert_eq!(
+            hash_credentials("us:ér", "päss:word", "001122aaccee").unwrap(),
+            "88bfb35cc1a3ce183b6fcd66b3b5fe3acbdaba620c3ce041d866ce6d055e2bb2"
+        );
+        assert_eq!(
+            hash_token("jwt:тøken", &hex::encode("clé:key")),
+            "4b59c58e38a81ab3dbe92b052651a678a6f5a175175ba01f1f1853849b25da89"
+        );
+        for key in ["", "z-secret", "a"] {
+            assert_eq!(
+                hash_token("tok", key),
+                "3d6cb1ab5aa9e075eeb3a608a885b15452f8f9c50a7d33aef07acfd8fdfdc6e1"
+            );
+        }
+        for (key, detail) in [
+            ("zz", "Invalid character 'z' at position 0"),
+            ("a", "Odd number of digits"),
+        ] {
+            let error = hash_credentials("fixture", "secret-password", key).unwrap_err();
+            assert!(error.is::<hex::FromHexError>());
+            assert_eq!(
+                error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+                ["Miniserver returned invalid hex key for hashing", detail]
+            );
+        }
+    }
 
     #[test]
     fn hash_token_known_vector() {
@@ -625,6 +632,57 @@ mod tests {
     // -- AES round-trip ---------------------------------------------------
 
     #[test]
+    fn legacy_aes_fixed_vectors_and_failure_shape() {
+        let key = std::array::from_fn(|i| i as u8);
+        let iv = std::array::from_fn(|i| i as u8);
+        // Independently computed with Python cryptography (OpenSSL backend).
+        let vectors = [
+            (0, "e9c3ef8ab23453e6f0749cd636e7a88e"),
+            (1, "cab6bf3990d9768d8e1262e8adcda55f"),
+            (15, "62b5e1438a1f9d3523ac06b82b425cab"),
+            (
+                16,
+                "f29000b62a499fd0a9f39a6add2e778053c8742d0ea29b2712f6c7af4048f4b4",
+            ),
+            (
+                17,
+                "f29000b62a499fd0a9f39a6add2e7780ae2c7b7cc6473eb497cabbd193c6174e",
+            ),
+            (
+                31,
+                "f29000b62a499fd0a9f39a6add2e7780a76daa7a1c9772567b358d49b169bc8d",
+            ),
+            (
+                32,
+                "f29000b62a499fd0a9f39a6add2e77809543b86fc046fa883a9446b82e47d12d371a2690c225b574ad74b7066f379d8d",
+            ),
+        ];
+        for (len, expected) in vectors {
+            let plaintext: Vec<u8> = (0..len).collect();
+            let ciphertext = aes_encrypt(&key, &iv, &plaintext);
+            assert_eq!(hex::encode(&ciphertext), expected);
+            assert_eq!(aes_decrypt(&key, &iv, &ciphertext).unwrap(), plaintext);
+        }
+        assert_eq!(
+            hex::encode(aes_encrypt(&key, &iv, "Grüße\0雪".as_bytes())),
+            "f004dee28fb3268301a39e80b24078aa"
+        );
+        for ciphertext in [vec![], vec![0], vec![0; 15], vec![0; 17], vec![0; 16]] {
+            let error = aes_decrypt(&key, &iv, &ciphertext).unwrap_err();
+            assert_eq!(error.to_string(), "AES decryption failed: Unpad Error");
+            assert_eq!(format!("{error:?}"), "AES decryption failed: Unpad Error");
+            assert_eq!(error.chain().count(), 1);
+            assert!(error.source().is_none());
+            let error = error.context("getkey2");
+            assert_eq!(error.to_string(), "getkey2");
+            assert_eq!(
+                error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+                ["getkey2", "AES decryption failed: Unpad Error"]
+            );
+        }
+    }
+
+    #[test]
     fn aes_encrypt_decrypt_round_trip() {
         let key = [0x42u8; 32];
         let iv = [0x13u8; 16];
@@ -659,6 +717,20 @@ mod tests {
         assert!(B64.decode(b64_part).is_ok());
     }
 
+    #[test]
+    fn encrypt_command_exact_legacy_utf8_envelope() {
+        let key = std::array::from_fn(|i| i as u8);
+        let iv = std::array::from_fn(|i| i as u8);
+        assert_eq!(
+            encrypt_command(&key, &iv, "Grüße\0雪"),
+            "jdev/sys/enc/8ATe4o+zJoMBo56AskB4qg=="
+        );
+        assert_eq!(
+            encrypt_command(&key, &iv, ""),
+            "jdev/sys/enc/6cPvirI0U+bwdJzWNueojg=="
+        );
+    }
+
     // -- parse_ll_response ------------------------------------------------
 
     #[test]
@@ -682,6 +754,29 @@ mod tests {
         let json = r#"{"LL":{"control":"test","value":"denied","code":"401"}}"#;
         let (code, _) = parse_ll_response(json).unwrap();
         assert_eq!(code, 401);
+    }
+
+    #[test]
+    fn parse_ll_response_preserves_legacy_error_chain() {
+        let text = "{\n\"LL\":{\"value\":\"opaque\",\"code\":?}}";
+        let original = serde_json::from_str::<serde_json::Value>(text).unwrap_err();
+        let error = parse_ll_response(text).unwrap_err();
+        assert_eq!(error.to_string(), "response is not valid JSON");
+        assert_eq!(
+            error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+            ["response is not valid JSON", &original.to_string()]
+        );
+        let source = error.downcast_ref::<serde_json::Error>().unwrap();
+        assert_eq!(source.classify(), original.classify());
+        assert_eq!(
+            (source.line(), source.column()),
+            (original.line(), original.column())
+        );
+        assert_eq!(error.root_cause().to_string(), original.to_string());
+        let missing = parse_ll_response("null").unwrap_err();
+        assert_eq!(missing.to_string(), "response missing 'LL' envelope");
+        assert_eq!(missing.chain().count(), 1);
+        assert!(missing.downcast_ref::<serde_json::Error>().is_none());
     }
 
     // -- extract_key_from_response ----------------------------------------
